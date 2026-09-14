@@ -1,7 +1,10 @@
 package git
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -39,15 +42,26 @@ func RevParse(dir string, args ...string) string {
 // HasChanges reports whether any tracked files differ between the same
 // relative path in two separate checkout directories. This works with
 // shallow clones since it compares working trees rather than commit history.
-func HasChanges(baseDir, headDir, path string) bool {
+func HasChanges(baseDir, headDir, path string) (bool, error) {
 	basePath := baseDir
 	headPath := headDir
 	if path != "" && path != "." {
-		basePath = basePath + "/" + path
-		headPath = headPath + "/" + path
+		basePath = filepath.Join(basePath, path)
+		headPath = filepath.Join(headPath, path)
 	}
-	cmd := exec.Command("git", "diff", "--no-index", "--quiet", basePath, headPath) // #nosec G204 -- paths are controlled by caller
-	return cmd.Run() != nil
+	// -- so a directory named like a flag stays a path.
+	cmd := exec.Command("git", "diff", "--no-index", "--quiet", "--", basePath, headPath) // #nosec G204 -- paths are controlled by caller
+	err := cmd.Run()
+	if err == nil {
+		return false, nil
+	}
+
+	// Only exit 1 means "they differ"; 128 or a missing git binary is a failure.
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return true, nil
+	}
+	return false, fmt.Errorf("git diff %s %s: %w", basePath, headPath, err)
 }
 
 func Log(dir, sha, format string) string {

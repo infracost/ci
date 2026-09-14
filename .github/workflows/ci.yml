@@ -15,10 +15,14 @@ defaults:
 
 jobs:
   test:
-    name: Unit Tests
-    runs-on: ubuntu-24.04
+    name: Unit Tests (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +31,8 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - run: make test-unit
+      # make is not on PATH on the Windows runner, so both legs call go directly.
+      - run: go test -short ./...
 
   integration:
     name: Integration Tests
@@ -119,6 +124,8 @@ jobs:
           - { goos: linux, goarch: arm64, runner: ubuntu-24.04 }
           - { goos: darwin, goarch: amd64, runner: macos-latest }
           - { goos: darwin, goarch: arm64, runner: macos-latest, native: true }
+          - { goos: windows, goarch: amd64, runner: ubuntu-24.04 }
+          - { goos: windows, goarch: arm64, runner: ubuntu-24.04 }
     steps:
       - uses: actions/checkout@v4
 
