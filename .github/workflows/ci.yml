@@ -31,6 +31,8 @@ jobs:
 
   integration:
     name: Integration Tests
+    # Fork and dependabot PRs never receive secrets, so the job could only skip.
+    if: github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -50,9 +52,8 @@ jobs:
           restore-keys: ${{ runner.os }}-scanner-plugins-
 
       # Without a token every integration test skips and the job is green
-      # having run nothing. Fork pull requests never receive secrets.
+      # having run nothing.
       - name: Check token is set
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           TOKEN: ${{ secrets.INFRACOST_CLI_AUTHENTICATION_TOKEN }}
         run: |
