@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infracost/actions/tools/scanner/internal/api/events"
-	"github.com/infracost/actions/tools/scanner/internal/config"
-	"github.com/infracost/actions/tools/scanner/internal/vcsurl"
+	"github.com/infracost/ci/internal/api/events"
+	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/ci/internal/vcsurl"
 )
 
 // ciPlatform passes an explicit INFRACOST_CI_PLATFORM through verbatim;

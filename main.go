@@ -6,11 +6,11 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/infracost/actions/tools/scanner/internal/api"
-	"github.com/infracost/actions/tools/scanner/internal/api/events"
-	"github.com/infracost/actions/tools/scanner/internal/commands"
-	"github.com/infracost/actions/tools/scanner/internal/config"
-	"github.com/infracost/actions/tools/scanner/internal/version"
+	"github.com/infracost/ci/internal/api"
+	"github.com/infracost/ci/internal/api/events"
+	"github.com/infracost/ci/internal/commands"
+	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/ci/internal/version"
 	"github.com/infracost/cli/pkg/config/process"
 	"github.com/infracost/cli/pkg/stacktrace"
 	"github.com/infracost/go-proto/pkg/diagnostic"
@@ -29,7 +29,7 @@ func run() int {
 	defer func() {
 		if r := recover(); r != nil {
 			client := cfg.Events.Client(api.Client(context.Background(), cfg.Auth.TokenFromCache(context.Background()), cfg.OrgID))
-			client.Push(context.Background(), "infracost-error", "error", r, "stacktrace", stacktrace.Sanitize(debug.Stack(), "github.com/infracost/cli/", "github.com/infracost/actions/"))
+			client.Push(context.Background(), "infracost-error", "error", r, "stacktrace", stacktrace.Sanitize(debug.Stack(), "github.com/infracost/cli/", "github.com/infracost/ci/"))
 			_, _ = fmt.Fprintf(os.Stderr, "An unexpected error occurred. This is a bug in Infracost, please report it at https://github.com/infracost/infracost/issues\n\n")
 			_, _ = fmt.Fprintf(os.Stderr, "panic: %v\n\n%s\n", r, debug.Stack())
 			os.Exit(1)

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/infracost/actions/tools/scanner/internal/api/dashboard"
-	"github.com/infracost/actions/tools/scanner/internal/config"
-	testingconfig "github.com/infracost/actions/tools/scanner/internal/config/testing"
+	"github.com/infracost/ci/internal/api/dashboard"
+	"github.com/infracost/ci/internal/config"
+	testingconfig "github.com/infracost/ci/internal/config/testing"
 	"github.com/stretchr/testify/mock"
 )
 

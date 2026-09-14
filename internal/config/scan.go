@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/infracost/actions/tools/scanner/internal/api/dashboard"
-	"github.com/infracost/actions/tools/scanner/internal/trace"
+	"github.com/infracost/ci/internal/api/dashboard"
+	"github.com/infracost/ci/internal/trace"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	repoconfig "github.com/infracost/config"
 	gorat "github.com/infracost/go-proto/pkg/rat"

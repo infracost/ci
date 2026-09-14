@@ -9,9 +9,9 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/infracost/actions/tools/scanner/internal/api/dashboard"
-	"github.com/infracost/actions/tools/scanner/internal/config"
-	testingconfig "github.com/infracost/actions/tools/scanner/internal/config/testing"
+	"github.com/infracost/ci/internal/api/dashboard"
+	"github.com/infracost/ci/internal/config"
+	testingconfig "github.com/infracost/ci/internal/config/testing"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"
 	"github.com/infracost/proto/gen/go/infracost/rational"
 	"github.com/infracost/vcs/pkg/vcs"

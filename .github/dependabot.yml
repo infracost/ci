@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      # ~70 indirect requirements; ungrouped this is a flood nobody reads.
+      # Majors stay ungrouped so one breaking bump cannot block the rest.
+      go-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

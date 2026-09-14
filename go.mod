@@ -1,4 +1,4 @@
-module github.com/infracost/actions/tools/scanner
+module github.com/infracost/ci
 
 go 1.25.11
 

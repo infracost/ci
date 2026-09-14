@@ -3,8 +3,8 @@ package config
 import (
 	"os"
 
-	"github.com/infracost/actions/tools/scanner/internal/api/dashboard"
-	"github.com/infracost/actions/tools/scanner/internal/api/events"
+	"github.com/infracost/ci/internal/api/dashboard"
+	"github.com/infracost/ci/internal/api/events"
 	"github.com/infracost/cli/pkg/auth"
 	"github.com/infracost/cli/pkg/config/process"
 	"github.com/infracost/cli/pkg/environment"

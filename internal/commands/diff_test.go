@@ -3,7 +3,7 @@ package commands
 import (
 	"testing"
 
-	"github.com/infracost/actions/tools/scanner/internal/config"
+	"github.com/infracost/ci/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

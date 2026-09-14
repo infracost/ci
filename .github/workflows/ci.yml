@@ -1,0 +1,147 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - run: make test-unit
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/infracost/plugins
+          key: ${{ runner.os }}-scanner-plugins-${{ hashFiles('go.sum') }}
+          restore-keys: ${{ runner.os }}-scanner-plugins-
+
+      # Without a token every integration test skips and the job is green
+      # having run nothing. Fork pull requests never receive secrets.
+      - name: Check token is set
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          TOKEN: ${{ secrets.INFRACOST_CLI_AUTHENTICATION_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "INFRACOST_CLI_AUTHENTICATION_TOKEN is not set, integration tests would all skip."
+            exit 1
+          fi
+
+      - run: make test-integration
+        env:
+          INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_CLI_AUTHENTICATION_TOKEN }}
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.10
+
+  mocks:
+    name: Mocks
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - run: make mocks
+
+      - name: Check for changes
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            echo "Mock files are out of date. Please run 'make mocks' and commit the changes."
+            git status --porcelain --untracked-files=all
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, runner: ubuntu-24.04, native: true }
+          - { goos: linux, goarch: arm64, runner: ubuntu-24.04 }
+          - { goos: darwin, goarch: amd64, runner: macos-latest }
+          - { goos: darwin, goarch: arm64, runner: macos-latest, native: true }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ci-test
+        run: |
+          go build \
+            -ldflags "-X github.com/infracost/ci/internal/version.Version=${VERSION}" \
+            -o "bin/infracost-scanner" \
+            .
+
+      # -X against a symbol that does not exist is silently ignored, so the
+      # ldflags path is only proven by running the binary. Cross-compiled
+      # matrix entries cannot run their own output.
+      - name: Assert version ldflags
+        if: matrix.native
+        env:
+          VERSION: ci-test
+        run: ./bin/infracost-scanner --version | grep -q "$VERSION"

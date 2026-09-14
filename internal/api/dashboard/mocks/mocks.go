@@ -7,7 +7,7 @@ package mocks
 import (
 	"context"
 
-	"github.com/infracost/actions/tools/scanner/internal/api/dashboard"
+	"github.com/infracost/ci/internal/api/dashboard"
 	mock "github.com/stretchr/testify/mock"
 )
 

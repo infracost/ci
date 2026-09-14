@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/infracost/actions/tools/scanner/internal/api"
-	"github.com/infracost/actions/tools/scanner/internal/api/dashboard"
-	"github.com/infracost/actions/tools/scanner/internal/config"
+	"github.com/infracost/ci/internal/api"
+	"github.com/infracost/ci/internal/api/dashboard"
+	"github.com/infracost/ci/internal/config"
 	"github.com/spf13/cobra"
 )
 

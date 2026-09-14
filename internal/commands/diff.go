@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/infracost/actions/tools/scanner/internal/api"
-	"github.com/infracost/actions/tools/scanner/internal/config"
-	"github.com/infracost/actions/tools/scanner/internal/git"
+	"github.com/infracost/ci/internal/api"
+	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/ci/internal/git"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	"github.com/infracost/go-proto/pkg/diagnostic"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"

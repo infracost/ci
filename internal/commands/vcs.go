@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/infracost/actions/tools/scanner/internal/config"
-	"github.com/infracost/actions/tools/scanner/internal/vcsurl"
+	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/ci/internal/vcsurl"
 	"github.com/infracost/cli/pkg/logging"
 )
 

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/infracost/actions/tools/scanner/internal/api/events/mocks"
-	"github.com/infracost/actions/tools/scanner/internal/config"
+	"github.com/infracost/ci/internal/api/events/mocks"
+	"github.com/infracost/ci/internal/config"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	goprotoevent "github.com/infracost/go-proto/pkg/event"
 	"github.com/infracost/proto/gen/go/infracost/provider"

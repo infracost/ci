@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/infracost/actions/tools/scanner/internal/api/dashboard"
-	"github.com/infracost/actions/tools/scanner/internal/vcsurl"
-	"github.com/infracost/actions/tools/scanner/internal/version"
+	"github.com/infracost/ci/internal/api/dashboard"
+	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/internal/version"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	"github.com/infracost/go-proto/pkg/address"
 	"github.com/infracost/go-proto/pkg/diagnostic"
