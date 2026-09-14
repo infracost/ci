@@ -13,6 +13,8 @@ func TestHasChanges(t *testing.T) {
 		name     string
 		path     string
 		headBody string
+		baseOnly string
+		headOnly string
 		want     bool
 		wantErr  bool
 	}{
@@ -20,7 +22,9 @@ func TestHasChanges(t *testing.T) {
 		{name: "differs", path: "proj", headBody: "different", want: true},
 		{name: "empty path compares roots", path: "", headBody: "different", want: true},
 		{name: "dot path compares roots", path: ".", headBody: "same", want: false},
-		// git exits 128 here, which must not be reported as a diff.
+		{name: "path added in head", path: "added", headBody: "same", headOnly: "added", want: true},
+		{name: "path deleted in head", path: "removed", headBody: "same", baseOnly: "removed", want: true},
+		// git exits 1 here as it does for a real diff, so the path must not read as one.
 		{name: "missing path errors", path: "nope", headBody: "same", wantErr: true},
 	}
 
@@ -28,6 +32,12 @@ func TestHasChanges(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			baseDir := writeTree(t, "same")
 			headDir := writeTree(t, tt.headBody)
+			if tt.baseOnly != "" {
+				require.NoError(t, os.MkdirAll(filepath.Join(baseDir, tt.baseOnly), 0o750))
+			}
+			if tt.headOnly != "" {
+				require.NoError(t, os.MkdirAll(filepath.Join(headDir, tt.headOnly), 0o750))
+			}
 
 			got, err := HasChanges(baseDir, headDir, tt.path)
 			if tt.wantErr {

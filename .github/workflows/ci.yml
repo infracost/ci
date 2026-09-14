@@ -140,9 +140,13 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           VERSION: ci-test
         run: |
+          BINARY="infracost-scanner"
+          if [ "$GOOS" = "windows" ]; then
+            BINARY="infracost-scanner.exe"
+          fi
           go build \
             -ldflags "-X github.com/infracost/ci/internal/version.Version=${VERSION}" \
-            -o "bin/infracost-scanner" \
+            -o "bin/${BINARY}" \
             .
 
       # -X against a symbol that does not exist is silently ignored, so the
@@ -152,4 +156,18 @@ jobs:
         if: matrix.native
         env:
           VERSION: ci-test
-        run: ./bin/infracost-scanner --version | grep -q "$VERSION"
+        run: ./bin/infracost-scanner --version | grep -qxF "scanner version $VERSION"
+
+      # Mirrors release.yml: the .exe suffix and the zip are otherwise first
+      # exercised mid-release, after the draft has been created.
+      - name: Package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          if [ "$GOOS" = "windows" ]; then
+            (cd bin && zip -q "../dist/infracost-scanner_${GOOS}_${GOARCH}.zip" infracost-scanner.exe)
+          else
+            tar -czf "dist/infracost-scanner_${GOOS}_${GOARCH}.tar.gz" -C bin infracost-scanner
+          fi

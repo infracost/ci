@@ -36,13 +36,20 @@ curl -fsSL -O "${BASE}/${REF}/${ARCHIVE}" &&
 Windows (PowerShell):
 
 ```powershell
+# Windows PowerShell 5.1 needs both: it may default below TLS 1.2, and the
+# progress stream makes a multi-megabyte -OutFile download very slow.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$ProgressPreference = "SilentlyContinue"
+
 $Base = if ($env:INFRACOST_SCANNER_BASE_URL) { $env:INFRACOST_SCANNER_BASE_URL } else { "https://github.com/infracost/ci/releases" }
 $Ref = "latest/download"     # or "download/v0.1.0" to pin
-$Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+# An emulated x64 host on ARM64 reports AMD64; ARCHITEW6432 holds the real one.
+$Machine = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$Arch = if ($Machine -eq "ARM64") { "arm64" } else { "amd64" }
 
 $Archive = "infracost-scanner_windows_$Arch.zip"
-Invoke-WebRequest -Uri "$Base/$Ref/$Archive" -OutFile $Archive
-Invoke-WebRequest -Uri "$Base/$Ref/checksums.txt" -OutFile checksums.txt
+Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Ref/$Archive" -OutFile $Archive
+Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Ref/checksums.txt" -OutFile checksums.txt
 
 $Expected = (Select-String -Path checksums.txt -Pattern " $Archive$").Line.Split(" ")[0]
 $Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLower()
