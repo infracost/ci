@@ -121,6 +121,9 @@ func TestPluginsDetect_NoProjectsIsAFailure(t *testing.T) {
 
 	_, err := execPlugins(t, "detect", "--path", filepath.Join(testdataDir(), "basic", "head"))
 	require.Error(t, err)
+	// detect can also fail in EnsurePlugins or LoadOrGenerateRepositoryConfig,
+	// and a bare Error assertion would stay green on either.
+	require.Contains(t, err.Error(), "no projects found")
 
 	entries, readErr := os.ReadDir(dir)
 	require.NoError(t, readErr)

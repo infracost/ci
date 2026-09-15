@@ -167,8 +167,6 @@ jobs:
     needs: [version, draft-release]
     permissions:
       contents: read
-    env:
-      CGO_ENABLED: 0
     strategy:
       matrix:
         include:
@@ -192,6 +190,15 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
+          # Static for linux and windows: the published archive should run on
+          # musl and in scratch/distroless. darwin keeps cgo — without it Go
+          # drops libSystem for its own resolver, which reads /etc/resolv.conf
+          # only and misses the /etc/resolver/* a VPN writes for split-horizon
+          # DNS, the likely setup for a self-hosted pricing endpoint.
+          if [ "$GOOS" != "darwin" ]; then
+            export CGO_ENABLED=0
+          fi
+
           BINARY="infracost-scanner"
           if [ "$GOOS" = "windows" ]; then
             BINARY="infracost-scanner.exe"
@@ -495,10 +502,14 @@ jobs:
           JSON=$(docker run --rm infracost-ci:probe plugins list --format json | jq -c .)
           echo "JSON=$JSON" >> "$GITHUB_OUTPUT"
 
-      # The version tag only: latest and the minor tag wait for image-verify.
-      # Pushed with the labels applied by hand rather than through
-      # build-push-action, whose label list is comma-separated and so cannot
-      # carry JSON.
+      # Pushed untagged. A tag here would survive a rollback: image only needs
+      # build, so it lands while the release is still a draft, and every later
+      # gate — checksums, publish, verify, verify-windows — can still fail and
+      # send rollback to re-draft. The archives then 404, but a tag does not
+      # un-push, leaving :VERSION serving bytes from a release that officially
+      # does not exist. Every tag is applied by image-tag, downstream of all of
+      # them. Labels are applied by hand rather than through build-push-action,
+      # whose label list is comma-separated and so cannot carry JSON.
       - name: Build and push
         id: push
         env:
@@ -517,16 +528,15 @@ jobs:
             --label "org.opencontainers.image.revision=${REVISION}" \
             --label "org.opencontainers.image.version=${VERSION}" \
             --label "io.infracost.plugins=${PLUGINS}" \
-            --tag "${IMAGE}:${VERSION}" \
-            --metadata-file metadata.json \
-            --push
+            --output "type=image,name=${IMAGE},push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file metadata.json
 
           DIGEST=$(jq -r '."containerimage.digest"' metadata.json)
           echo "DIGEST=$DIGEST" >> "$GITHUB_OUTPUT"
 
-  # A failure here has no rollback by design: image-tag never runs, so every
-  # floating tag stays on the previous release. The orphaned version tag is the
-  # remainder — delete the package version, or release a new patch.
+  # A failure here has no rollback by design: image-tag never runs, so no tag is
+  # ever created and every floating tag stays on the previous release. The
+  # untagged manifest is the only remainder, and nothing can resolve it.
   image-verify:
     name: Verify image
     runs-on: ubuntu-24.04
@@ -621,6 +631,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # The first tag the package gets. image pushed by digest only, so until
+      # this step there is nothing for a pull to resolve — which is what keeps
+      # a rolled-back release from leaving a usable :VERSION behind.
+      - name: Apply the version tag
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION}" \
+            "${IMAGE}@${DIGEST}"
 
       # latest and the minor tag are what every install recipe points at, so
       # they only move when publish decided this release claimed latest.

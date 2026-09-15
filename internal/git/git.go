@@ -24,8 +24,20 @@ func GetCommitInfo(dir, sha string) CommitInfo {
 	}
 }
 
+// hardenedArgs prefixes a git invocation with the exec keys reachable from
+// rev-parse and log. The image sets safe.directory '*', so git will read
+// .git/config from a mounted checkout; -c outranks repo config, system config
+// does not. Extend this if a new subcommand is added.
+func hardenedArgs(args ...string) []string {
+	return append([]string{
+		"-c", "core.fsmonitor=false",
+		"-c", "core.pager=cat",
+		"-c", "log.showSignature=false",
+	}, args...)
+}
+
 func RevParse(dir string, args ...string) string {
-	cmd := exec.Command("git", append([]string{"rev-parse"}, args...)...) // #nosec G204 -- args are controlled by caller
+	cmd := exec.Command("git", hardenedArgs(append([]string{"rev-parse"}, args...)...)...) // #nosec G204 -- args are controlled by caller
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -37,7 +49,7 @@ func RevParse(dir string, args ...string) string {
 }
 
 func Log(dir, sha, format string) string {
-	cmd := exec.Command("git", "log", "-1", "--format="+format, sha) // #nosec G204 -- args are controlled by caller
+	cmd := exec.Command("git", hardenedArgs("log", "-1", "--format="+format, sha)...) // #nosec G204 -- args are controlled by caller
 	if dir != "" {
 		cmd.Dir = dir
 	}

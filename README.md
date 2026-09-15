@@ -19,6 +19,9 @@ Anonymous download needs `infracost/ci` to be public; until it is, these recipes
 
 ### Container
 
+The GHCR package inherits the repository's private visibility, so `docker pull` fails
+for everyone until `infracost/ci` is public, the same as the downloads below.
+
 The container is the route most CI users should take: it carries `git` and all the
 parser and provider plugins, so a job pulls once instead of downloading ~150 MB of
 plugins on every run.
@@ -161,10 +164,11 @@ Asset names carry no version. `latest/download` is a plain redirect to the newes
 release, and it only resolves while the name is identical across versions.
 
 The same run publishes `ghcr.io/infracost/ci` for `linux/amd64` and `linux/arm64`,
-built from the archives above rather than from a second compile. The exact version
-tag is pushed first; `latest` and the minor tag are applied only after both the
-archives and the image have been verified, and only when this release claimed the
-`latest` redirect.
+built from the archives above rather than from a second compile. The image is pushed
+untagged and stays unresolvable until both the archives and the image have been
+verified; only then does it get its version tag, so a release that rolls back leaves
+nothing behind. `latest` and the minor tag need one thing more — that this release
+claimed the `latest` redirect.
 `image-digest.txt` carries the manifest-list digest and is attached to the release.
 
 The GHCR package inherits the repository's private visibility. Making it public is a

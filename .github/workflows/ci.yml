@@ -117,8 +117,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-    env:
-      CGO_ENABLED: 0
     strategy:
       matrix:
         include:
@@ -142,6 +140,15 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           VERSION: ci-test
         run: |
+          # Static for linux and windows: the published archive should run on
+          # musl and in scratch/distroless. darwin keeps cgo — without it Go
+          # drops libSystem for its own resolver, which reads /etc/resolv.conf
+          # only and misses the /etc/resolver/* a VPN writes for split-horizon
+          # DNS, the likely setup for a self-hosted pricing endpoint.
+          if [ "$GOOS" != "darwin" ]; then
+            export CGO_ENABLED=0
+          fi
+
           BINARY="infracost-scanner"
           if [ "$GOOS" = "windows" ]; then
             BINARY="infracost-scanner.exe"
