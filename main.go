@@ -68,6 +68,7 @@ func run() int {
 	cmd.AddCommand(commands.Diff(cfg, &results))
 	cmd.AddCommand(commands.Scan(cfg))
 	cmd.AddCommand(commands.Status(cfg))
+	cmd.AddCommand(commands.Plugins(cfg))
 
 	if diags.Critical().Len() > 0 {
 		for _, diag := range diags.Critical().Unwrap() {

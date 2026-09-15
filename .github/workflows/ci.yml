@@ -117,6 +117,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+    env:
+      CGO_ENABLED: 0
     strategy:
       matrix:
         include:
@@ -171,3 +173,86 @@ jobs:
           else
             tar -czf "dist/infracost-scanner_${GOOS}_${GOARCH}.tar.gz" -C bin infracost-scanner
           fi
+
+      # Only the Windows archives leave this job. They are the ones nothing
+      # else opens, and the zip has to cross runners to be worth extracting.
+      - uses: actions/upload-artifact@v4
+        if: matrix.goos == 'windows'
+        with:
+          name: ci-infracost-scanner_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # The zip is written on Linux by a tool Windows never runs, and until now
+  # nothing opened it before a release. release.yml's verify-windows does the
+  # same against published assets, but only at release time and only once the
+  # repository is public.
+  verify-windows:
+    name: Verify Windows archive
+    runs-on: windows-latest
+    timeout-minutes: 10
+    needs: build
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ci-infracost-scanner_windows_*
+          merge-multiple: true
+          path: dist
+
+      - name: Extract and run
+        shell: pwsh
+        env:
+          VERSION: ci-test
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Expand-Archive, not unzip: it is what the README recipe tells a
+          # user to run, so it is the thing worth proving.
+          foreach ($Arch in "amd64", "arm64") {
+            $Archive = "dist/infracost-scanner_windows_$Arch.zip"
+            Expand-Archive -Path $Archive -DestinationPath $Arch -Force
+            if (-not (Test-Path "$Arch/infracost-scanner.exe")) {
+              throw "$Archive contains no infracost-scanner.exe"
+            }
+          }
+
+          # windows-latest is x64, so only the amd64 binary can be executed here.
+          $Out = (& ./amd64/infracost-scanner.exe --version | Select-Object -First 1).Trim()
+          if ($Out -ne "scanner version $env:VERSION") {
+            throw "expected 'scanner version $env:VERSION', got '$Out'"
+          }
+
+  # amd64 only and never pushed: release.yml is otherwise the first run of the
+  # Dockerfile, and it fails there after the draft and archives are published.
+  image:
+    name: Image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # dist/${TARGETARCH}/ is the layout release.yml lays out from the archives.
+      - name: Build into dist/
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -o dist/amd64/infracost-scanner .
+
+      - run: docker build . --tag infracost-ci:ci
+
+      - name: Smoke test
+        run: |
+          docker run --rm infracost-ci:ci --version
+          docker run --rm -v "$PWD/internal/commands/testdata/basic/head:/src" \
+            infracost-ci:ci plugins detect --path /src

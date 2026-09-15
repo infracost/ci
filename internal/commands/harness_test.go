@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"path/filepath"
 	"testing"
 
@@ -80,4 +81,23 @@ func execScanArgs(t *testing.T, argv ...string) (*config.Config, *scanArgs, erro
 
 	root.SetArgs(append([]string{"scan", "--path", testdataDir()}, argv...))
 	return cfg, args, root.Execute()
+}
+
+// execPlugins parses argv through the real root command and returns whatever
+// the subcommand wrote, so the output format and the exit code are both
+// asserted on the wiring rather than on the helpers behind it.
+func execPlugins(t *testing.T, argv ...string) (string, error) {
+	t.Helper()
+
+	cfg := new(config.Config)
+	root := newTestRoot(t, cfg)
+	root.AddCommand(Plugins(cfg))
+
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs(append([]string{"plugins"}, argv...))
+
+	err := root.Execute()
+	return out.String(), err
 }

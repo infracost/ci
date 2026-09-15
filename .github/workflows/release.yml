@@ -167,6 +167,8 @@ jobs:
     needs: [version, draft-release]
     permissions:
       contents: read
+    env:
+      CGO_ENABLED: 0
     strategy:
       matrix:
         include:
@@ -361,16 +363,70 @@ jobs:
             -o latest-checksums.txt "https://github.com/${REPOSITORY}/releases/latest/download/checksums.txt"
           diff latest-checksums.txt checksums.txt
 
+  # The Linux leg cannot extract a zip member it has no way to run, so the .exe
+  # name and the zip layout are asserted here. Mirrors the README recipe.
+  verify-windows:
+    name: Verify Windows archive
+    runs-on: windows-latest
+    timeout-minutes: 10
+    needs: [version, publish]
+    if: ${{ !github.event.repository.private }}
+    permissions: {}
+    steps:
+      - name: Download, extract and run the Windows archive
+        shell: pwsh
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TAG: v${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $Base = "https://github.com/$env:REPOSITORY/releases/download/$env:TAG"
+
+          # Assets can 404 for a few seconds after the release is published.
+          function Get-Asset($Name) {
+            for ($i = 1; $i -le 6; $i++) {
+              try {
+                Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Name" -OutFile $Name
+                return
+              } catch {
+                Start-Sleep -Seconds 5
+              }
+            }
+            throw "failed to download $Name"
+          }
+
+          Get-Asset "checksums.txt"
+          foreach ($Arch in "amd64", "arm64") {
+            $Archive = "infracost-scanner_windows_$Arch.zip"
+            Get-Asset $Archive
+            $Expected = (Select-String -Path checksums.txt -Pattern " $Archive$").Line.Split(" ")[0]
+            $Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLower()
+            if ($Expected -ne $Actual) { throw "checksum mismatch for $Archive" }
+
+            Expand-Archive -Path $Archive -DestinationPath $Arch -Force
+            if (-not (Test-Path "$Arch/infracost-scanner.exe")) {
+              throw "$Archive contains no infracost-scanner.exe"
+            }
+          }
+
+          # windows-latest is x64, so only the amd64 binary can be executed here.
+          $Out = (& ./amd64/infracost-scanner.exe --version | Select-Object -First 1).Trim()
+          if ($Out -ne "scanner version $env:VERSION") {
+            throw "expected 'scanner version $env:VERSION', got '$Out'"
+          }
+
   # verify runs after publish, so a failure must pull the release back out of
   # latest rather than leave anonymous installs on a broken version.
   rollback:
     name: Rollback to draft
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    needs: [version, publish, verify]
+    needs: [version, publish, verify, verify-windows]
     # Cancelled counts too: a cancelled verify leaves an unverified release in
     # latest. A skipped one (private repo) does not, so it must not match.
-    if: always() && needs.publish.result == 'success' && (needs.verify.result == 'failure' || needs.verify.result == 'cancelled')
+    if: always() && needs.publish.result == 'success' && (contains(fromJSON('["failure", "cancelled"]'), needs.verify.result) || contains(fromJSON('["failure", "cancelled"]'), needs['verify-windows'].result))
     # No environment: an approval gate here would strand a bad release in latest.
     permissions:
       contents: write
@@ -384,3 +440,223 @@ jobs:
           gh release edit "$TAG" \
             --repo "$REPOSITORY" \
             --draft
+
+  # Hangs off build, not publish: it consumes the uploaded artifacts, so a GHCR
+  # failure cannot block the archives from publishing.
+  image:
+    name: Image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    needs: [version, build]
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.DIGEST }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: infracost-scanner_linux_*
+          path: artifacts
+
+      # The Dockerfile COPYs dist/${TARGETARCH}/, which is how one Dockerfile
+      # serves both platforms. The image ships the bytes that were released;
+      # there is no Go toolchain in it.
+      - name: Lay out dist/
+        run: |
+          for ARCH in amd64 arm64; do
+            mkdir -p "dist/${ARCH}"
+            tar -xzf "artifacts/infracost-scanner_linux_${ARCH}/infracost-scanner_linux_${ARCH}.tar.gz" \
+              -C "dist/${ARCH}"
+          done
+          ls -l dist/*/
+
+      # arm64 is emulated rather than built on ubuntu-24.04-arm, which is not
+      # available on private-repository plans. Only apk and the plugin install
+      # are architecture-specific; the binaries are copied, not compiled.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # UpdatePlugins resolves "latest" at build time, so what an image contains
+      # is only knowable by asking it. Built with --load first so the answer
+      # comes from the image itself; the push below reuses the buildx cache.
+      - name: Resolve the plugin versions this build got
+        id: plugins
+        run: |
+          docker buildx build . --platform linux/amd64 --load --tag infracost-ci:probe
+          JSON=$(docker run --rm infracost-ci:probe plugins list --format json | jq -c .)
+          echo "JSON=$JSON" >> "$GITHUB_OUTPUT"
+
+      # The version tag only: latest and the minor tag wait for image-verify.
+      # Pushed with the labels applied by hand rather than through
+      # build-push-action, whose label list is comma-separated and so cannot
+      # carry JSON.
+      - name: Build and push
+        id: push
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PLUGINS: ${{ steps.plugins.outputs.JSON }}
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          # Provenance left on: the attestation manifests carry unknown/unknown
+          # and are skipped by a pull --platform, so it is the only thing tying
+          # the image back to this workflow.
+          docker buildx build . \
+            --platform linux/amd64,linux/arm64 \
+            --label "org.opencontainers.image.source=https://github.com/${REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${REVISION}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --label "io.infracost.plugins=${PLUGINS}" \
+            --tag "${IMAGE}:${VERSION}" \
+            --metadata-file metadata.json \
+            --push
+
+          DIGEST=$(jq -r '."containerimage.digest"' metadata.json)
+          echo "DIGEST=$DIGEST" >> "$GITHUB_OUTPUT"
+
+  # A failure here has no rollback by design: image-tag never runs, so every
+  # floating tag stays on the previous release. The orphaned version tag is the
+  # remainder — delete the package version, or release a new patch.
+  image-verify:
+    name: Verify image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [version, image]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+
+      # Only needed while the package inherits the repository's private
+      # visibility. Drop it with FIX-726, the way the archive verify has no
+      # GH_TOKEN.
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Pulled by digest from the manifest list so the check cannot drift onto
+      # a different push. Under QEMU the arm64 leg proves ELF architecture and
+      # that the binaries are not corrupt — not that they run on real hardware.
+      - name: Verify both platforms
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          REF="${IMAGE}@${DIGEST}"
+          TESTDATA="${GITHUB_WORKSPACE}/internal/commands/testdata"
+
+          for PLATFORM in linux/amd64 linux/arm64; do
+            echo "::group::$PLATFORM"
+            docker pull -q --platform "$PLATFORM" "$REF"
+            RUN="docker run --rm --platform $PLATFORM"
+
+            # A bad -X is silent, so the version is only proven by running it.
+            $RUN "$REF" --version | grep -qxF "scanner version $VERSION"
+
+            # Exits non-zero unless every required plugin is installed and
+            # answered GetPluginInfo, so the assertion is the exit code — no
+            # count here, which would need editing every time the required set
+            # changes. Non-emptiness is the one thing it cannot self-assert.
+            $RUN "$REF" plugins list --format json > list.json
+            jq -e '[.[] | select(.required)] | length > 0' list.json > /dev/null
+
+            # The label is probed once on amd64 but carried by both manifests,
+            # so a plugin released between the two builds would make it a lie.
+            docker inspect --format '{{ index .Config.Labels "io.infracost.plugins" }}' "$REF" |
+              jq -S 'map({key, version}) | sort' > label.json
+            jq -S 'map({key, version}) | sort' list.json > installed.json
+            diff label.json installed.json
+
+            # detect is the closest thing to a scan that runs without a token.
+            # basic/head has no infracost.yml, so the terraform parser is asked
+            # to identify projects in real HCL over gRPC.
+            for NETWORK in bridge none; do
+              $RUN --network "$NETWORK" -v "${TESTDATA}/basic/head:/src" "$REF" \
+                plugins detect --path /src
+
+              $RUN --network "$NETWORK" -v "${TESTDATA}/multi-project/head:/src" "$REF" \
+                plugins detect --path /src > detect.txt
+              cat detect.txt
+              grep -qE '^web[[:space:]]' detect.txt
+              grep -qE '^api[[:space:]]' detect.txt
+            done
+
+            # The README's runAsNonRoot recipe: uid 65532 has no home in the
+            # image, so the caches under HOME are what a bare --user breaks.
+            $RUN --user 65532 -e HOME=/tmp -v "${TESTDATA}/basic/head:/src" "$REF" \
+              plugins detect --path /src
+            echo "::endgroup::"
+          done
+
+  image-tag:
+    name: Tag image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [version, publish, image, image-verify, verify, verify-windows]
+    # verify is skipped while the repo is private, and a skipped need would
+    # cascade, so it is gated on the result: a verify that failed sends rollback
+    # to re-draft the release, and latest must not point at that version.
+    if: ${{ !cancelled() && !failure() && needs.verify.result != 'cancelled' && needs['verify-windows'].result != 'cancelled' }}
+    environment: release
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # latest and the minor tag are what every install recipe points at, so
+      # they only move when publish decided this release claimed latest.
+      - name: Apply the floating tags
+        if: needs.publish.outputs.latest == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: v${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          # The concurrency group is keyed by version, so two releases can be
+          # in flight at once and publish decided this one was newest before
+          # the other existed. Between there and here the answer can change,
+          # and an older run arriving second would drag latest backwards.
+          CURRENT=$(gh release view --repo "$REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)
+          if [ -n "$CURRENT" ] && [ "$CURRENT" != "$TAG" ]; then
+            echo "$CURRENT is the latest release now, not $TAG. Leaving the floating tags alone."
+            exit 0
+          fi
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION%.*}" \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}@${DIGEST}"
+
+      # checksums.txt hashes the tarballs and says nothing about the image, so
+      # an image consumer otherwise has no published hash to pin against.
+      - name: Publish the manifest digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          echo "$DIGEST" > image-digest.txt
+          gh release upload "$TAG" image-digest.txt --repo "$REPOSITORY" --clobber
