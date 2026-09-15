@@ -120,6 +120,13 @@ func (config *Config) ScanDirectory(ctx context.Context, dir string, accessToken
 		return nil, fmt.Errorf("failed to resolve absolute path for %q: %w", dir, err)
 	}
 
+	// Before generating the repo config, not lazily during the scan:
+	// autodetection delegates to plugin identifiers, so a cold plugin cache
+	// silently yields zero projects rather than an error.
+	if _, err := config.Plugins.EnsurePlugins(ctx); err != nil {
+		return nil, fmt.Errorf("failed to install plugins: %w", err)
+	}
+
 	var repoConfigOpts []repoconfig.GenerationOption
 	if runParams.RepositoryName != "" {
 		repoConfigOpts = append(repoConfigOpts, repoconfig.WithRepoName(runParams.RepositoryName))

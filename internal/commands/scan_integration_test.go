@@ -32,7 +32,8 @@ func setupScanEventsMocks(m *testingconfig.Mocks) *map[string]interface{} {
 
 func runScan(t *testing.T, cfg *config.Config, path string) error {
 	t.Helper()
-	return scan(cfg, &scanArgs{path: path})
+	// scan reads the repo URL from config only, so the fixture must supply it.
+	return scan(cfg, &scanArgs{path: path, repoURL: testRepoURL})
 }
 
 func TestScan_BasicUpload(t *testing.T) {
