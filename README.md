@@ -12,6 +12,57 @@ Extracted from `infracost/actions@46b6838ed6f7af5263cce838b9b82427b270f29d` by F
 - `scanner scan` — Scan a single directory and upload baseline results to the Infracost dashboard. Powers [`infracost/actions/scan`](https://github.com/infracost/actions/tree/master/scan).
 - `scanner status` — Update the pull request status in the Infracost dashboard (OPEN, MERGED, CLOSED).
 
+## Installing
+
+Anonymous download needs `infracost/ci` to be public; until it is, these recipes 404.
+
+Linux and macOS:
+
+```bash
+BASE="${INFRACOST_SCANNER_BASE_URL:-https://github.com/infracost/ci/releases}"
+REF="latest/download"        # or "download/v0.1.0" to pin
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; esac
+SHA=$(command -v sha256sum || echo "shasum -a 256")   # macOS has no sha256sum
+
+# Chained: an unverified archive must never reach tar.
+ARCHIVE="infracost-scanner_${OS}_${ARCH}.tar.gz"
+curl -fsSL -O "${BASE}/${REF}/${ARCHIVE}" &&
+  curl -fsSL -O "${BASE}/${REF}/checksums.txt" &&
+  grep " ${ARCHIVE}$" checksums.txt | $SHA -c - &&
+  tar -xzf "$ARCHIVE"
+```
+
+Windows (PowerShell):
+
+```powershell
+# Windows PowerShell 5.1 needs both: it may default below TLS 1.2, and the
+# progress stream makes a multi-megabyte -OutFile download very slow.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$ProgressPreference = "SilentlyContinue"
+
+$Base = if ($env:INFRACOST_SCANNER_BASE_URL) { $env:INFRACOST_SCANNER_BASE_URL } else { "https://github.com/infracost/ci/releases" }
+$Ref = "latest/download"     # or "download/v0.1.0" to pin
+# An emulated x64 host on ARM64 reports AMD64; ARCHITEW6432 holds the real one.
+$Machine = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$Arch = if ($Machine -eq "ARM64") { "arm64" } else { "amd64" }
+
+$Archive = "infracost-scanner_windows_$Arch.zip"
+Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Ref/$Archive" -OutFile $Archive
+Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Ref/checksums.txt" -OutFile checksums.txt
+
+$Expected = (Select-String -Path checksums.txt -Pattern " $Archive$").Line.Split(" ")[0]
+$Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLower()
+if ($Expected -ne $Actual) { throw "checksum mismatch for $Archive" }
+
+Expand-Archive -Path $Archive -DestinationPath . -Force
+```
+
+Set `INFRACOST_SCANNER_BASE_URL` to serve the same layout from somewhere other than
+GitHub releases. `checksums.txt` comes from the same host as the archive, so the
+verification proves the download was not corrupted — not that the host is honest.
+Only point `BASE` at a host you trust.
+
 ## Development
 
 ```bash
@@ -25,10 +76,17 @@ make mocks            # Regenerate mockery mocks
 
 ## Releasing
 
-Releases are not yet published from this repository. The actions still download
-`scanner/v*` binaries released from
-[`infracost/actions`](https://github.com/infracost/actions/releases); that copy of the
-source is frozen and changes belong here.
+Pushing a `v*.*.*` tag builds six platforms, attaches `checksums.txt`, and publishes
+the release. Once the repository is public the assets are downloadable anonymously —
+no `gh` CLI, no GitHub token.
 
-Releasing from this repository is FIX-724, and pointing the actions at those releases is
-FIX-726.
+```
+infracost-scanner_<os>_<arch>.tar.gz     # linux, darwin
+infracost-scanner_windows_<arch>.zip     # contains infracost-scanner.exe
+checksums.txt
+```
+
+Asset names carry no version. `latest/download` is a plain redirect to the newest
+release, and it only resolves while the name is identical across versions.
+
+Pointing the actions at these releases is FIX-726.

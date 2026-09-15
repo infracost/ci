@@ -1,0 +1,386 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to be released (e.g., 0.1.0)"
+        type: string
+        required: true
+
+permissions: {}
+
+# Keyed on the version, normalised so a dispatch and a tag push of the same
+# version share a group. A workflow-wide key would evict a queued release of a
+# different version: GitHub keeps only one pending run per group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # A dispatch can name any ref, which would release unreviewed code.
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            RAW_VERSION="$INPUT_VERSION"
+          else
+            RAW_VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${RAW_VERSION#v}"
+
+          # =~ matches the whole string; grep is line-based, so a newline in a
+          # dispatch input would smuggle extra keys into $GITHUB_OUTPUT.
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version '$VERSION' is not a semver x.y.z[-pre] version."
+            exit 1
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+
+  # ci.yml only runs on push to main and pull_request, so nothing else stops a
+  # tag on a red commit from being built, published and marked latest.
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: version
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - run: go test -short ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.10
+
+  draft-release:
+    name: Draft release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [version, test]
+    # Second gate for the write-scoped jobs, after the version job's ref check.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Check for existing release
+        id: check-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "EXISTS=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "EXISTS=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # gh release create drops --target when the tag ref already exists, which
+      # would leave the release describing a commit it was not built from.
+      - name: Check the tag points at this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET: ${{ github.sha }}
+        run: |
+          TAG_SHA=$(gh api "repos/${REPOSITORY}/commits/${TAG}" --jq .sha 2>/dev/null || true)
+          if [ -n "$TAG_SHA" ] && [ "$TAG_SHA" != "$TARGET" ]; then
+            echo "Tag $TAG is at $TAG_SHA but this run builds $TARGET. Release a new version."
+            exit 1
+          fi
+
+      - name: Create draft release
+        if: steps.check-release.outputs.EXISTS == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET: ${{ github.sha }}
+        run: |
+          # --target pins the tag to the built commit; a dispatch would
+          # otherwise tag the default branch while the build uses github.ref.
+          gh release create "$TAG" \
+            --repo "$REPOSITORY" \
+            --target "$TARGET" \
+            --title "Scanner $VERSION" \
+            --generate-notes \
+            --draft
+
+      # Drafting a published release 404s every pinned download and hands
+      # latest back to the previous version, so refuse instead.
+      - name: Refuse to rebuild a published release
+        if: steps.check-release.outputs.EXISTS == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          IS_DRAFT=$(gh release view "$TAG" --repo "$REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "Release $TAG is already published. Release a new version instead of re-running."
+            exit 1
+          fi
+
+      # A draft keeps the target of the run that created it, so a re-run would
+      # otherwise tag an older commit than the one these binaries come from.
+      - name: Point the existing draft at this commit
+        if: steps.check-release.outputs.EXISTS == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET: ${{ github.sha }}
+        run: gh release edit "$TAG" --repo "$REPOSITORY" --target "$TARGET"
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    needs: [version, draft-release]
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, runner: ubuntu-24.04, native: true }
+          - { goos: linux, goarch: arm64, runner: ubuntu-24.04 }
+          - { goos: darwin, goarch: amd64, runner: macos-latest }
+          - { goos: darwin, goarch: arm64, runner: macos-latest, native: true }
+          - { goos: windows, goarch: amd64, runner: ubuntu-24.04 }
+          - { goos: windows, goarch: arm64, runner: ubuntu-24.04 }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          BINARY="infracost-scanner"
+          if [ "$GOOS" = "windows" ]; then
+            BINARY="infracost-scanner.exe"
+          fi
+          go build \
+            -ldflags "-X github.com/infracost/ci/internal/version.Version=${VERSION}" \
+            -o "bin/${BINARY}" \
+            .
+
+      # -X against a symbol that does not exist is silently ignored, so the
+      # ldflags path is only proven by running the binary. Cross-compiled
+      # matrix entries cannot run their own output.
+      - name: Assert version ldflags
+        if: matrix.native
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: ./bin/infracost-scanner --version | grep -qxF "scanner version $VERSION"
+
+      # No version in the asset name: the latest/download redirect only works
+      # while the name is identical across releases.
+      - name: Package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          if [ "$GOOS" = "windows" ]; then
+            (cd bin && zip -q "../dist/infracost-scanner_${GOOS}_${GOARCH}.zip" infracost-scanner.exe)
+          else
+            tar -czf "dist/infracost-scanner_${GOOS}_${GOARCH}.tar.gz" -C bin infracost-scanner
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infracost-scanner_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  checksums:
+    name: Checksums
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [version, build]
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: infracost-scanner_*
+          merge-multiple: true
+          path: dist
+
+      # Hashed in one Linux job: the build matrix spans runners that disagree
+      # on the tool (sha256sum vs shasum) and on the output format.
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          ls -1
+          sha256sum infracost-scanner_* > checksums.txt
+          cat checksums.txt
+
+      - name: Upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh release upload "$TAG" ./dist/* \
+            --repo "$REPOSITORY" \
+            --clobber
+
+  publish:
+    name: Publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [version, checksums]
+    environment: release
+    permissions:
+      contents: write
+    outputs:
+      latest: ${{ steps.publish.outputs.LATEST }}
+    steps:
+      - name: Publish release
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          # A prerelease must not take over the latest/download redirect.
+          LATEST="--latest"
+          case "$VERSION" in *-*) LATEST="--prerelease" ;; esac
+
+          # --latest overrides GitHub's ordering, so a hotfix cut from an old
+          # branch would silently downgrade every floating install.
+          if [ "$LATEST" = "--latest" ]; then
+            CURRENT=$(gh release view --repo "$REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)
+            NEWEST=$(printf '%s\n%s\n' "${CURRENT#v}" "$VERSION" | sort -V | tail -1)
+            if [ -n "$CURRENT" ] && [ "$NEWEST" != "$VERSION" ]; then
+              echo "Release $CURRENT is newer than $TAG, leaving the latest redirect alone."
+              LATEST="--latest=false"
+            fi
+          fi
+
+          if [ "$LATEST" = "--latest" ]; then
+            echo "LATEST=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "LATEST=false" >> "$GITHUB_OUTPUT"
+          fi
+          gh release edit "$TAG" \
+            --repo "$REPOSITORY" \
+            --draft=false \
+            "$LATEST"
+
+  # Deliberately has no GH_TOKEN and no checkout: a step with credentials in
+  # scope cannot demonstrate that the download needs none.
+  verify:
+    name: Verify anonymous download
+    runs-on: ubuntu-24.04
+    # A hung verify leaves a published, unverified release in latest until
+    # rollback can run, so cap it well under the 6h default.
+    timeout-minutes: 10
+    needs: [version, publish]
+    # An anonymous download cannot work while the repo is private, and rollback
+    # would then draft every release it publishes. Drop this with FIX-726.
+    if: ${{ !github.event.repository.private }}
+    permissions: {}
+    steps:
+      - name: Download assets with curl
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TAG: v${{ needs.version.outputs.version }}
+        run: |
+          BASE="https://github.com/${REPOSITORY}/releases/download/${TAG}"
+          mkdir -p verify && cd verify
+          # Assets can 404 for a few seconds after the release is published.
+          CURL="curl -fsSL --retry 6 --retry-delay 5 --retry-all-errors -O"
+          $CURL "${BASE}/checksums.txt"
+
+          # Driven by checksums.txt so a new build matrix entry cannot go unchecked.
+          while read -r _ ASSET; do
+            $CURL "${BASE}/${ASSET}"
+          done < checksums.txt
+
+      - name: Verify checksums
+        working-directory: verify
+        run: sha256sum -c checksums.txt
+
+      - name: Verify binary reports the released version
+        working-directory: verify
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          tar -xzf infracost-scanner_linux_amd64.tar.gz
+          ./infracost-scanner --version | grep -qxF "scanner version $VERSION"
+
+      # Only assert the redirect when this release actually claimed it.
+      - name: Verify the latest redirect resolves to this release
+        if: needs.publish.outputs.latest == 'true'
+        working-directory: verify
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          # Compared, not just fetched: a 200 also passes on the old release.
+          curl -fsSL --retry 6 --retry-delay 5 --retry-all-errors \
+            -o latest-checksums.txt "https://github.com/${REPOSITORY}/releases/latest/download/checksums.txt"
+          diff latest-checksums.txt checksums.txt
+
+  # verify runs after publish, so a failure must pull the release back out of
+  # latest rather than leave anonymous installs on a broken version.
+  rollback:
+    name: Rollback to draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [version, publish, verify]
+    # Cancelled counts too: a cancelled verify leaves an unverified release in
+    # latest. A skipped one (private repo) does not, so it must not match.
+    if: always() && needs.publish.result == 'success' && (needs.verify.result == 'failure' || needs.verify.result == 'cancelled')
+    # No environment: an approval gate here would strand a bad release in latest.
+    permissions:
+      contents: write
+    steps:
+      - name: Draft the release again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh release edit "$TAG" \
+            --repo "$REPOSITORY" \
+            --draft
