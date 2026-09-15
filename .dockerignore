@@ -1,0 +1,3 @@
+# The build copies released binaries; nothing else in the checkout is needed.
+*
+!dist
