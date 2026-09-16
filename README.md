@@ -1,82 +1,229 @@
 # Infracost CI
 
-Scanner is the Go CLI that powers the Infracost GitHub Actions. It embeds the Infracost CLI as a library to scan directories of infrastructure code, calculate cost diffs, and post comments on pull requests.
+Cloud cost estimates for infrastructure code, in your CI pipeline.
 
-The tool requires `git` at runtime to derive commit SHAs, branch names, and commit metadata from the checkout directories. Scanning and diffing logic is imported directly via `github.com/infracost/cli/pkg/scanner` rather than shelling out to the Infracost CLI.
+`infracost-scanner` is a single Go binary that scans directories of infrastructure
+code, calculates the cost difference between two branches, posts a comment on the
+pull request, and uploads the run to [Infracost Cloud](https://dashboard.infracost.io).
+It embeds the Infracost CLI as a library rather than shelling out to it.
 
-Extracted from `infracost/actions@46b6838ed6f7af5263cce838b9b82427b270f29d` by FIX-723.
+- **Cost diffs on every PR** — what this change does to the monthly bill.
+- **Guardrails, budgets and FinOps policies** — evaluated against the head branch, with a non-zero exit when a blocking one trips.
+- **Baseline scans** — keep the dashboard current for the default branch.
+- **No install step in CI** — the container image ships `git` and every parser and provider plugin.
+
+## How it works
+
+```mermaid
+flowchart LR
+  base[base checkout] --> scanner
+  head[head checkout] --> scanner["infracost-scanner diff"]
+  scanner <--> cloud[("Infracost Cloud<br/>policies · guardrails · budgets")]
+  scanner --> comment["PR comment"]
+  scanner --> gate{"blocking<br/>violation?"}
+  gate -->|yes| fail["exit 1"]
+  gate -->|no| pass["exit 0"]
+```
+
+`diff` takes **two checkouts of the same repository** — the base branch and the head
+branch — not one path. `scan` is the single-directory command.
+
+Across the life of a pull request:
+
+```mermaid
+sequenceDiagram
+    participant Repo as Default branch
+    participant PR as Pull request
+    participant CI
+    participant Cloud as Infracost Cloud
+    Repo->>CI: push
+    CI->>Cloud: scanner scan --path .
+    PR->>CI: opened / synchronised
+    CI->>Cloud: scanner diff --base-path … --head-path …
+    Cloud-->>CI: policies, guardrails, budgets
+    CI->>PR: cost comment (created or updated)
+    PR->>CI: merged / closed
+    CI->>Cloud: scanner status --status MERGED
+```
+
+## Provider support
+
+| Provider | `scan` | `diff` | PR comment | `status` |
+| --- | :---: | :---: | :---: | :---: |
+| GitHub | ✅ | ✅ | ✅ | ✅ |
+| GitLab | ✅ | — | — | ✅ |
+| Bitbucket | ✅ | — | — | ✅ |
+| Azure Repos | ✅ | — | — | ✅ |
+
+Comment posting is GitHub-only today, and `diff` always posts, so it is GitHub-only
+too. Everywhere else, `scan` uploads branch runs and `status` tracks the PR state —
+results appear in the dashboard, not in the merge request.
+
+GitHub Enterprise Server is not supported: only `github.com` repositories.
+
+## Getting started
+
+You need an [Infracost API key](https://dashboard.infracost.io) in
+`INFRACOST_CLI_AUTHENTICATION_TOKEN`.
+
+### GitHub Actions
+
+```yaml
+name: Infracost
+on: [pull_request]
+
+jobs:
+  infracost:
+    runs-on: ubuntu-latest
+    container: ghcr.io/infracost/ci:0.1
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_API_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      INFRACOST_VCS_PROVIDER: github
+      INFRACOST_VCS_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+      INFRACOST_VCS_PULL_REQUEST_ID: ${{ github.event.pull_request.number }}
+      INFRACOST_VCS_PULL_REQUEST_TITLE: ${{ github.event.pull_request.title }}
+      INFRACOST_VCS_PULL_REQUEST_AUTHOR: ${{ github.event.pull_request.user.login }}
+      INFRACOST_VCS_BRANCH: ${{ github.head_ref }}
+      INFRACOST_VCS_BASE_BRANCH: ${{ github.base_ref }}
+      INFRACOST_VCS_PIPELINE_RUN_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: actions/checkout@v4
+        with:
+          path: head
+      - run: infracost-scanner diff --base-path base --head-path head
+```
+
+The image entrypoint is the scanner, but a `container:` job replaces it with its own
+shell — so the step names the binary rather than passing a subcommand to the image.
+
+### GitLab CI
+
+Merge request comments are not supported yet. Scan the default branch so the
+dashboard stays current:
+
+```yaml
+infracost:
+  image: ghcr.io/infracost/ci:0.1
+  variables:
+    INFRACOST_VCS_PROVIDER: gitlab
+    INFRACOST_VCS_REPOSITORY_URL: $CI_PROJECT_URL
+    INFRACOST_VCS_BRANCH: $CI_COMMIT_REF_NAME
+    INFRACOST_VCS_PIPELINE_RUN_ID: $CI_PIPELINE_ID
+  script:
+    - infracost-scanner scan --path .
+```
+
+`INFRACOST_CLI_AUTHENTICATION_TOKEN` goes in a masked CI/CD variable.
+
+### Bitbucket Pipelines
+
+```yaml
+image: ghcr.io/infracost/ci:0.1
+
+pipelines:
+  branches:
+    main:
+      - step:
+          name: Infracost
+          script:
+            - export INFRACOST_VCS_PROVIDER=bitbucket
+            - export INFRACOST_VCS_REPOSITORY_URL="https://bitbucket.org/$BITBUCKET_REPO_FULL_NAME"
+            - export INFRACOST_VCS_BRANCH=$BITBUCKET_BRANCH
+            - export INFRACOST_VCS_PIPELINE_RUN_ID=$BITBUCKET_BUILD_NUMBER
+            - infracost-scanner scan --path .
+```
+
+### Azure Pipelines
+
+```yaml
+jobs:
+  - job: infracost
+    container: ghcr.io/infracost/ci:0.1
+    steps:
+      - checkout: self
+      - script: infracost-scanner scan --path .
+        env:
+          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
+          INFRACOST_VCS_PROVIDER: azure_repos
+          INFRACOST_VCS_REPOSITORY_URL: $(Build.Repository.Uri)
+          INFRACOST_VCS_BRANCH: $(Build.SourceBranchName)
+          INFRACOST_VCS_PIPELINE_RUN_ID: $(Build.BuildId)
+```
+
+`INFRACOST_VCS_REPOSITORY_URL` must be the repository URL containing `/_git/`, not
+the project URL.
 
 ## Commands
 
-- `scanner diff` — Scan base and head branches, compute a cost diff, post a PR comment, and upload results to the Infracost dashboard. Powers [`infracost/actions/diff`](https://github.com/infracost/actions/tree/master/diff).
-- `scanner scan` — Scan a single directory and upload baseline results to the Infracost dashboard. Powers [`infracost/actions/scan`](https://github.com/infracost/actions/tree/master/scan).
-- `scanner status` — Update the pull request status in the Infracost dashboard (OPEN, MERGED, CLOSED).
-- `scanner plugins` — Install the parser and provider plugins (`install`), report the versions they answer with (`list`), and print the projects they identify in a directory (`detect`). None of the three need an authentication token.
+| Command | What it does |
+| --- | --- |
+| `diff --base-path <dir> --head-path <dir>` | Scan both checkouts, compute the cost diff, post or update the PR comment, upload the run. Exits 1 on a new blocking guardrail or policy violation. |
+| `scan --path <dir>` | Scan one directory and upload a branch run. |
+| `status --status OPEN\|MERGED\|CLOSED` | Update the pull request state in the dashboard. |
+| `plugins install\|list\|detect` | Install the parser and provider plugins, report their versions, or print the projects they identify. No auth token needed. |
+
+Run `infracost-scanner <command> --help` for the full flag list. Most VCS metadata
+can come from a flag or an `INFRACOST_VCS_*` variable; the flag wins when both are
+set. Paths are flags only.
+
+## Configuration
+
+| Variable | Notes |
+| --- | --- |
+| `INFRACOST_CLI_AUTHENTICATION_TOKEN` | Required by `diff` and `scan`. |
+| `INFRACOST_VCS_PROVIDER` | `github`, `gitlab`, `azure_repos` or `bitbucket`. |
+| `INFRACOST_VCS_REPOSITORY_URL` | Repository **web** URL. Required — never a clone URL with credentials in it. |
+| `INFRACOST_VCS_PULL_REQUEST_ID` | PR number. On GitLab this is the project-scoped `iid`. |
+| `INFRACOST_VCS_PULL_REQUEST_URL` | Alternative to the ID. Set both and they must agree. |
+| `INFRACOST_VCS_BRANCH`, `INFRACOST_VCS_BASE_BRANCH` | Fall back to the checkout's git metadata. |
+| `INFRACOST_VCS_PIPELINE_RUN_ID` | Links the run back to the CI job. |
+| `INFRACOST_CI_DISABLE_DASHBOARD` | Skip uploading results. |
+
+Commit SHA, message, author and timestamp are read from the head checkout when not
+set explicitly — which is why `git` must be on `PATH`. The container image has it.
 
 ## Installing
 
-Anonymous download needs `infracost/ci` to be public; until it is, these recipes 404.
+### Container (recommended)
 
-### Container
-
-The GHCR package inherits the repository's private visibility, so `docker pull` fails
-for everyone until `infracost/ci` is public, the same as the downloads below.
-
-The container is the route most CI users should take: it carries `git` and all the
-parser and provider plugins, so a job pulls once instead of downloading ~150 MB of
-plugins on every run.
+The image carries `git` and every plugin, so a job pulls once instead of downloading
+~150 MB of plugins on every run.
 
 ```bash
-# docker run: the entrypoint is the scanner, so the subcommand is the argument
 docker run --rm -e INFRACOST_CLI_AUTHENTICATION_TOKEN -v "$PWD:/src" -w /src \
-  ghcr.io/infracost/ci:latest diff --base-path base --head-path head
+  ghcr.io/infracost/ci:latest scan --path .
 ```
 
-Both CI forms below replace the entrypoint with their own shell, so they name the
-binary rather than passing a subcommand to the image:
-
-```yaml
-# GitHub Actions
-container: ghcr.io/infracost/ci:0.1.0
-steps:
-  - run: infracost-scanner diff --base-path base --head-path head
-```
-
-```yaml
-# GitLab CI
-infracost:
-  image: ghcr.io/infracost/ci:0.1.0
-  script:
-    - infracost-scanner diff --base-path base --head-path head
-```
-
-`diff` takes two checkouts of the same repository, not one path. `scan --path .`
-is the single-directory command.
-
-Tags are `latest`, the minor series (`0.1`), and the exact version (`0.1.0`). Only
-the exact version is immutable; pin by digest to pin the bytes:
+Tags are `latest`, the minor series (`0.1`) and the exact version (`0.1.0`). Only the
+exact version is immutable; pin by digest to pin the bytes:
 
 ```bash
 docker run --rm ghcr.io/infracost/ci@sha256:... --version
 ```
 
-The digest is published as `image-digest.txt` on each release, and
-`docker inspect` reports the plugin versions the image was built with under the
-`io.infracost.plugins` label.
+Each release publishes the manifest-list digest as `image-digest.txt`, and
+`docker inspect` reports the plugin versions baked in under the `io.infracost.plugins`
+label.
 
-The image defaults to root, which matches what a GitHub Actions `container:` job
-does anyway and sidesteps uid mismatches against a mounted workspace. The plugin
-directory is world-readable and executable, so `docker run --user 65532` loads the
-plugins — but that uid has no home directory in the image, and the scanner caches
-under it. A `runAsNonRoot` policy needs a writable one:
+The image defaults to root, which matches what a GitHub Actions `container:` job does
+and sidesteps uid mismatches against a mounted workspace. Under a `runAsNonRoot`
+policy, give the user a writable home — the scanner caches there:
 
 ```bash
 docker run --rm --user 65532 -e HOME=/tmp -e INFRACOST_CLI_AUTHENTICATION_TOKEN \
   -v "$PWD:/src" -w /src ghcr.io/infracost/ci:latest scan --path .
 ```
 
-`git::` Terraform module sources work; `hg::` sources do not, since Mercurial is
-not in the image.
+`git::` Terraform module sources work; `hg::` sources do not, since Mercurial is not
+in the image.
 
 ### Binary
 
@@ -100,8 +247,8 @@ curl -fsSL -O "${BASE}/${REF}/${ARCHIVE}" &&
 Windows (PowerShell):
 
 ```powershell
-# Windows PowerShell 5.1 needs both: it may default below TLS 1.2, and the
-# progress stream makes a multi-megabyte -OutFile download very slow.
+# PowerShell 5.1 may default below TLS 1.2, and the progress stream makes a
+# multi-megabyte -OutFile download very slow.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $ProgressPreference = "SilentlyContinue"
 
@@ -122,25 +269,29 @@ if ($Expected -ne $Actual) { throw "checksum mismatch for $Archive" }
 Expand-Archive -Path $Archive -DestinationPath . -Force
 ```
 
-Set `INFRACOST_SCANNER_BASE_URL` to serve the same layout from somewhere other than
-GitHub releases. `checksums.txt` comes from the same host as the archive, so the
-verification proves the download was not corrupted — not that the host is honest.
-Only point `BASE` at a host you trust.
+Assets are `infracost-scanner_<os>_<arch>.tar.gz` (linux, darwin),
+`infracost-scanner_windows_<arch>.zip` and `checksums.txt`. Set
+`INFRACOST_SCANNER_BASE_URL` to serve the same layout from your own mirror.
+`checksums.txt` comes from the same host as the archive, so verification proves the
+download was not corrupted — not that the host is honest. Only point it at a host
+you trust.
+
+Binary installs need `git` on `PATH`, and the first run downloads the plugins.
 
 ## Development
 
 ```bash
 make build            # Build the binary
 make test             # Run all tests
-make test-unit        # Run unit tests only (skips integration tests)
-make test-integration # Run integration tests (requires INFRACOST_CLI_AUTHENTICATION_TOKEN)
-make lint             # Run golangci-lint
+make test-unit        # Unit tests only
+make test-integration # Integration tests (needs INFRACOST_CLI_AUTHENTICATION_TOKEN)
+make lint             # golangci-lint
 make mocks            # Regenerate mockery mocks
 ```
 
 The `Dockerfile` copies a released binary rather than compiling one, so it does not
-build from a clean checkout — `dist/` is produced by the release workflow. To build
-it locally, put a binary where the workflow would:
+build from a clean checkout. To build it locally, put a binary where the release
+workflow would:
 
 ```bash
 mkdir -p "dist/$(go env GOARCH)"
@@ -148,30 +299,11 @@ CGO_ENABLED=0 go build -o "dist/$(go env GOARCH)/infracost-scanner" .
 docker build -t infracost-ci:dev .
 ```
 
-## Releasing
+Pushing a `v*.*.*` tag builds six platforms, attaches `checksums.txt`, publishes the
+release, and pushes `ghcr.io/infracost/ci` for `linux/amd64` and `linux/arm64`. The
+image is only tagged once the archives and the image have both been verified, so a
+rolled-back release leaves nothing behind.
 
-Pushing a `v*.*.*` tag builds six platforms, attaches `checksums.txt`, and publishes
-the release. Once the repository is public the assets are downloadable anonymously —
-no `gh` CLI, no GitHub token.
+## License
 
-```
-infracost-scanner_<os>_<arch>.tar.gz     # linux, darwin
-infracost-scanner_windows_<arch>.zip     # contains infracost-scanner.exe
-checksums.txt
-```
-
-Asset names carry no version. `latest/download` is a plain redirect to the newest
-release, and it only resolves while the name is identical across versions.
-
-The same run publishes `ghcr.io/infracost/ci` for `linux/amd64` and `linux/arm64`,
-built from the archives above rather than from a second compile. The image is pushed
-untagged and stays unresolvable until both the archives and the image have been
-verified; only then does it get its version tag, so a release that rolls back leaves
-nothing behind. `latest` and the minor tag need one thing more — that this release
-claimed the `latest` redirect.
-`image-digest.txt` carries the manifest-list digest and is attached to the release.
-
-The GHCR package inherits the repository's private visibility. Making it public is a
-manual step, taken at the same moment as making `infracost/ci` public (FIX-726).
-
-Pointing the actions at these releases is FIX-726.
+[Apache 2.0](LICENSE)
