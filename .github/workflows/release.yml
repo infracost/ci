@@ -572,22 +572,32 @@ jobs:
 
           for PLATFORM in linux/amd64 linux/arm64; do
             echo "::group::$PLATFORM"
-            docker pull -q --platform "$PLATFORM" "$REF"
+
+            # The child digest, not the list: pulling one manifest-list digest
+            # twice under different --platform fails with "cannot overwrite
+            # digest". Children come from that list, so this still cannot drift.
+            CHILD=$(docker buildx imagetools inspect --raw "$REF" |
+              jq -er --arg p "$PLATFORM" '.manifests[]
+                | select(.platform.os + "/" + .platform.architecture == $p)
+                | .digest')
+            PREF="${IMAGE}@${CHILD}"
+
+            docker pull -q --platform "$PLATFORM" "$PREF"
             RUN="docker run --rm --platform $PLATFORM"
 
             # A bad -X is silent, so the version is only proven by running it.
-            $RUN "$REF" --version | grep -qxF "scanner version $VERSION"
+            $RUN "$PREF" --version | grep -qxF "scanner version $VERSION"
 
             # Exits non-zero unless every required plugin is installed and
             # answered GetPluginInfo, so the assertion is the exit code — no
             # count here, which would need editing every time the required set
             # changes. Non-emptiness is the one thing it cannot self-assert.
-            $RUN "$REF" plugins list --format json > list.json
+            $RUN "$PREF" plugins list --format json > list.json
             jq -e '[.[] | select(.required)] | length > 0' list.json > /dev/null
 
             # The label is probed once on amd64 but carried by both manifests,
             # so a plugin released between the two builds would make it a lie.
-            docker inspect --format '{{ index .Config.Labels "io.infracost.plugins" }}' "$REF" |
+            docker inspect --format '{{ index .Config.Labels "io.infracost.plugins" }}' "$PREF" |
               jq -S 'map({key, version}) | sort' > label.json
             jq -S 'map({key, version}) | sort' list.json > installed.json
             diff label.json installed.json
@@ -596,10 +606,10 @@ jobs:
             # basic/head has no infracost.yml, so the terraform parser is asked
             # to identify projects in real HCL over gRPC.
             for NETWORK in bridge none; do
-              $RUN --network "$NETWORK" -v "${TESTDATA}/basic/head:/src" "$REF" \
+              $RUN --network "$NETWORK" -v "${TESTDATA}/basic/head:/src" "$PREF" \
                 plugins detect --path /src
 
-              $RUN --network "$NETWORK" -v "${TESTDATA}/multi-project/head:/src" "$REF" \
+              $RUN --network "$NETWORK" -v "${TESTDATA}/multi-project/head:/src" "$PREF" \
                 plugins detect --path /src > detect.txt
               cat detect.txt
               grep -qE '^web[[:space:]]' detect.txt
@@ -608,7 +618,7 @@ jobs:
 
             # The README's runAsNonRoot recipe: uid 65532 has no home in the
             # image, so the caches under HOME are what a bare --user breaks.
-            $RUN --user 65532 -e HOME=/tmp -v "${TESTDATA}/basic/head:/src" "$REF" \
+            $RUN --user 65532 -e HOME=/tmp -v "${TESTDATA}/basic/head:/src" "$PREF" \
               plugins detect --path /src
             echo "::endgroup::"
           done
