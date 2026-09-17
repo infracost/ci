@@ -326,6 +326,11 @@ func TestGitHubAPIURL(t *testing.T) {
 		{name: "fqdn trailing dot is ignored", repoURL: "https://github.com./infracost/actions"},
 		{name: "enterprise", repoURL: "https://ghes.corp/infracost/actions", want: "https://ghes.corp"},
 		{name: "enterprise keeps the port", repoURL: "https://ghes.corp:8443/org/repo", want: "https://ghes.corp:8443"},
+		{name: "default port is still github.com", repoURL: "https://github.com:443/infracost/actions"},
+		{name: "default http port is still github.com", repoURL: "http://github.com:80/infracost/actions"},
+		// A nonstandard port is a different service: returning "" would send
+		// the token to api.github.com rather than to the port named.
+		{name: "nonstandard port is enterprise", repoURL: "https://github.com:8443/org/repo", want: "https://github.com:8443"},
 		{name: "enterprise over http", repoURL: "http://ghes.internal/org/repo", want: "http://ghes.internal"},
 		{name: "clone URL is refused", repoURL: "git@github.com:infracost/actions.git", wantErr: "must be an http(s) web URL"},
 		{name: "credentials do not leak", repoURL: "https://secret@ghes.corp/org/repo", wantErr: "must not contain credentials"},
@@ -402,6 +407,9 @@ func TestCheckProviderHost(t *testing.T) {
 		{name: "GHES passes", provider: ProviderGitHub, repoURL: "https://ghes.corp/org/repo"},
 		{name: "self-managed gitlab passes", provider: ProviderGitLab, repoURL: "https://gitlab.corp/group/repo"},
 		{name: "azure devops server passes", provider: ProviderAzureRepos, repoURL: "https://tfs.corp/tfs/project/_git/repo"},
+		// A nonstandard port is not the vendor's host, so it constrains nothing.
+		{name: "nonstandard port is unconstrained", provider: ProviderGitLab, repoURL: "https://github.com:8443/org/repo"},
+		{name: "default port still constrains", provider: ProviderGitLab, repoURL: "https://github.com:443/infracost/actions", wantErr: `is a github host, but INFRACOST_VCS_PROVIDER is "gitlab"`},
 		{name: "host case is ignored", provider: ProviderGitLab, repoURL: "https://GitHub.com/infracost/actions", wantErr: `is a github host, but INFRACOST_VCS_PROVIDER is "gitlab"`},
 		{name: "gitlab on github.com", provider: ProviderGitLab, repoURL: "https://github.com/infracost/actions", wantErr: `is a github host, but INFRACOST_VCS_PROVIDER is "gitlab"`},
 		{name: "azure on github.com", provider: ProviderAzureRepos, repoURL: "https://github.com/infracost/actions", wantErr: `is a github host, but INFRACOST_VCS_PROVIDER is "azure_repos"`},

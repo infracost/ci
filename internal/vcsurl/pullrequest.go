@@ -52,6 +52,9 @@ var providerHosts = map[string]string{
 // e.g. myorg.visualstudio.com.
 const visualStudioSuffix = ".visualstudio.com"
 
+// defaultPorts are the ports a vendor-hosted URL may name explicitly.
+var defaultPorts = map[string]string{"http": "80", "https": "443"}
+
 // Valid reports whether PullRequest can build a URL for provider.
 func Valid(provider string) bool {
 	return slices.Contains(providers, provider)
@@ -134,7 +137,7 @@ func CheckProviderHost(provider, repoURL string) error {
 		return err
 	}
 
-	host := hostname(repoURL)
+	host := vendorHost(repoURL)
 	want, known := providerHosts[host]
 	if !known && strings.HasSuffix(host, visualStudioSuffix) {
 		want, known = ProviderAzureRepos, true
@@ -154,7 +157,7 @@ func GitHubAPIURL(repoURL string) (string, error) {
 		return "", err
 	}
 
-	if slices.Contains(gitHubHosts, hostname(repoURL)) {
+	if slices.Contains(gitHubHosts, vendorHost(repoURL)) {
 		return "", nil
 	}
 
@@ -210,12 +213,19 @@ func TrimRepoURL(repoURL string) string {
 	return strings.TrimSuffix(strings.TrimSuffix(repoURL, "/"), ".git")
 }
 
-// hostname lowercases the host: hosts are case-insensitive and url.Parse does
-// not normalise them. Hostname() also strips the port and IPv6 brackets. The
+// vendorHost returns the vendor-hosted host a URL names, or "" when it cannot
+// be one. Hosts are case-insensitive and url.Parse does not normalise them; the
 // FQDN trailing dot goes too, or "github.com." would miss providerHosts.
-func hostname(repoURL string) string {
+//
+// A nonstandard port means a different service whatever the hostname says, so
+// github.com:8443 is enterprise rather than github.com — classifying it as
+// github.com would send its token to api.github.com instead.
+func vendorHost(repoURL string) string {
 	u, err := url.Parse(repoURL)
 	if err != nil {
+		return ""
+	}
+	if port := u.Port(); port != "" && port != defaultPorts[u.Scheme] {
 		return ""
 	}
 	return strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
