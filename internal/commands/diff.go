@@ -11,6 +11,7 @@ import (
 	"github.com/infracost/ci/internal/config"
 	"github.com/infracost/ci/internal/git"
 	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/cli/pkg/logging"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	"github.com/infracost/go-proto/pkg/diagnostic"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"
@@ -425,12 +426,17 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 		return fmt.Errorf("failed to generate comment: %w", err)
 	}
 
-	if _, err := vcsClient.PostComment(ctx, body, vcs.BehaviorUpdate); err != nil {
+	postResult, waited, err := postComment(ctx, vcsClient, body, defaultRetryPolicy)
+	if err != nil {
 		return fmt.Errorf("failed to post comment: %w", err)
+	}
+	if postResult.SkipReason != "" {
+		logging.Warnf("comment not posted: %s", postResult.SkipReason)
 	}
 
 	eventsClient := cfg.Events.Client(httpClient)
-	trackRun(ctx, eventsClient, headResult, baseResult, time.Since(startTime).Seconds(), "comment")
+	// Retry sleep is not compute time, and would skew the metric on rate-limited runs.
+	trackRun(ctx, eventsClient, headResult, baseResult, (time.Since(startTime) - waited).Seconds(), "comment")
 	trackDiff(ctx, eventsClient, headResult, baseResult)
 
 	checkBlockingViolations(data, runParams.Guardrails, results)
