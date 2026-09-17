@@ -286,6 +286,37 @@ func TestDiff_ScanFailureDashboardDisabled(t *testing.T) {
 	}
 }
 
+// A retried post must not fail the run, and its sleep must stay out of the
+// tracked run time.
+func TestDiff_RetriedPostIsNotRunTime(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+
+	setupDashboardAddRun(m)
+	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{}, retryAfterError("1")).Once()
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{SkipReason: "not updating comment since the latest one is newer"}, nil).Once()
+	runEvent := setupEventsMocks(m)
+
+	start := time.Now()
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+	elapsed := time.Since(start)
+
+	require.GreaterOrEqual(t, elapsed, time.Second, "expected the retry to sleep for the Retry-After")
+	runSeconds, ok := (*runEvent)["runSeconds"].(float64)
+	require.True(t, ok, "expected runSeconds in infracost-run event")
+	assert.LessOrEqual(t, runSeconds, elapsed.Seconds()-1)
+}
+
 func TestDiff_GuardrailTriggered(t *testing.T) {
 	cfg, m := testingconfig.Config(t)
 	processPlugins(cfg)
