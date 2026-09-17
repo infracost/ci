@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"github.com/infracost/ci/internal/vcsurl"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -89,12 +90,17 @@ func TestScanVCSContext_EnvironmentAndFlag(t *testing.T) {
 	assert.Equal(t, "flag-run", args.pipelineRunID)
 }
 
-// The explicit owner and repo override the path, not the host: the client has
-// no APIURL, so an enterprise token would go to api.github.com.
-func TestResolveOwnerRepo_RefusesNonGitHubHost(t *testing.T) {
-	_, _, err := resolveOwnerRepo("github", "https://ghes.corp.internal/org/repo", "org", "repo")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "the repository URL host is not github.com")
+// The host no longer constrains the owner and repo: newVCSClient derives
+// APIURL from the same URL, so a GHES token goes to the GHES host.
+func TestResolveOwnerRepo_AcceptsEnterpriseHost(t *testing.T) {
+	owner, repo, err := resolveOwnerRepo("https://ghes.corp.internal/org/repo", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "org", owner)
+	assert.Equal(t, "repo", repo)
+
+	apiURL, err := vcsurl.GitHubAPIURL("https://ghes.corp.internal/org/repo")
+	require.NoError(t, err)
+	assert.Equal(t, "https://ghes.corp.internal", apiURL)
 }
 
 func TestNormaliseTimestamp(t *testing.T) {

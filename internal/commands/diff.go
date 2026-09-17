@@ -4,18 +4,22 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/infracost/ci/internal/api"
 	"github.com/infracost/ci/internal/config"
 	"github.com/infracost/ci/internal/git"
+	"github.com/infracost/ci/internal/vcsurl"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	"github.com/infracost/go-proto/pkg/diagnostic"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"
 	"github.com/infracost/proto/gen/go/infracost/provider"
 	"github.com/infracost/vcs/pkg/vcs"
+	"github.com/infracost/vcs/pkg/vcs/azure"
 	"github.com/infracost/vcs/pkg/vcs/comment"
 	"github.com/infracost/vcs/pkg/vcs/github"
+	"github.com/infracost/vcs/pkg/vcs/gitlab"
 	"github.com/spf13/cobra"
 )
 
@@ -33,6 +37,12 @@ type diffArgs struct {
 	githubToken   string
 	githubOwner   string
 	githubRepo    string
+	githubAPIURL  string
+	gitlabToken   string
+	gitlabProject string
+	gitlabServer  string
+	azureToken    string
+	tag           string
 }
 
 // diffContext is the VCS metadata for one diff run, resolved environment then
@@ -84,7 +94,7 @@ func diffCommand(cfg *config.Config, results *ScanResult) (*cobra.Command, *diff
 			if err != nil {
 				return err
 			}
-			client, err := newVCSClient(ctx, &args, vcsCtx)
+			client, err := newVCSClient(ctx, cfg, &args, vcsCtx)
 			if err != nil {
 				return fmt.Errorf("failed to create VCS client: %w", err)
 			}
@@ -107,6 +117,14 @@ func diffCommand(cfg *config.Config, results *ScanResult) (*cobra.Command, *diff
 	diffCmd.Flags().StringVar(&args.githubToken, "github-token", os.Getenv("GITHUB_TOKEN"), "API token for posting comments")
 	diffCmd.Flags().StringVar(&args.githubOwner, "github-owner", "", "GitHub repository owner (derived from the repo URL when unset)")
 	diffCmd.Flags().StringVar(&args.githubRepo, "github-repo", "", "GitHub repository name (derived from the repo URL when unset)")
+	// No GITHUB_SERVER_URL default: GitHub Actions sets it to https://github.com
+	// on github.com, which github.newClient would take as an enterprise host.
+	diffCmd.Flags().StringVar(&args.githubAPIURL, "github-api-url", "", "GitHub Enterprise Server base URL, e.g. https://ghes.corp (derived from the repo URL when unset)")
+	diffCmd.Flags().StringVar(&args.gitlabToken, "gitlab-token", os.Getenv("GITLAB_TOKEN"), "API token for posting merge request notes")
+	diffCmd.Flags().StringVar(&args.gitlabProject, "gitlab-project", "", "GitLab project full path, e.g. group/subgroup/repo (derived from the repo URL when unset)")
+	diffCmd.Flags().StringVar(&args.gitlabServer, "gitlab-server-url", "", "Self-managed GitLab base URL (derived from the repo URL when unset)")
+	diffCmd.Flags().StringVar(&args.azureToken, "azure-token", firstNonEmpty(os.Getenv("AZURE_DEVOPS_EXT_PAT"), os.Getenv("SYSTEM_ACCESSTOKEN")), "Azure DevOps PAT or bearer token for posting comments")
+	diffCmd.Flags().StringVar(&args.tag, "tag", "", "Comment tag identifying this run's comments (default \"infracost-comment\")")
 
 	// pr-number, github-owner and github-repo were MarkFlagRequired, which asks
 	// only about the command line; resolveDiffContext names the variable.
@@ -163,12 +181,105 @@ func resolveDiffContext(cfg *config.Config, args *diffArgs) (diffContext, error)
 	}, nil
 }
 
-func newVCSClient(ctx context.Context, args *diffArgs, vcsCtx diffContext) (vcs.VCS, error) {
-	owner, repo, err := resolveOwnerRepo(vcsCtx.provider, vcsCtx.repoURL, args.githubOwner, args.githubRepo)
+// newVCSClient builds the comment client for the resolved provider. Each
+// branch derives its own identity from the repository URL resolveDiffContext
+// already validated; only the switch knows the vcs module's package names.
+func newVCSClient(ctx context.Context, cfg *config.Config, args *diffArgs, vcsCtx diffContext) (vcs.VCS, error) {
+	// First, so a provider aimed at another vendor's host cannot send its
+	// token there before any client exists.
+	if err := vcsurl.CheckProviderHost(vcsCtx.provider, vcsCtx.repoURL); err != nil {
+		return nil, err
+	}
+
+	tlsConfig, err := cfg.TLSConfig()
 	if err != nil {
 		return nil, err
 	}
-	return github.New(ctx, owner, repo, args.githubToken, int32(vcsCtx.prNumber), github.Options{}) //nolint:gosec // PR numbers won't overflow int32
+
+	if vcsCtx.provider != vcsurl.ProviderGitHub && (args.githubOwner != "" || args.githubRepo != "" || args.githubAPIURL != "") {
+		return nil, fmt.Errorf("--github-owner, --github-repo and --github-api-url name a GitHub repository, but INFRACOST_VCS_PROVIDER is %q", vcsCtx.provider)
+	}
+
+	switch vcsCtx.provider {
+	case vcsurl.ProviderGitHub:
+		owner, repo, err := resolveOwnerRepo(vcsCtx.repoURL, args.githubOwner, args.githubRepo)
+		if err != nil {
+			return nil, err
+		}
+		apiURL, err := resolveGitHubAPIURL(args.githubAPIURL, vcsCtx.repoURL)
+		if err != nil {
+			return nil, err
+		}
+		if err := requireToken(args.githubToken, "--github-token", "GITHUB_TOKEN"); err != nil {
+			return nil, err
+		}
+		//nolint:gosec // PR numbers won't overflow int32
+		return github.New(ctx, owner, repo, args.githubToken, int32(vcsCtx.prNumber), github.Options{
+			APIURL:    apiURL,
+			TLSConfig: tlsConfig,
+			Tag:       args.tag,
+		})
+
+	case vcsurl.ProviderGitLab:
+		serverURL, project, err := vcsurl.GitLabProject(vcsCtx.repoURL)
+		if err != nil && (args.gitlabProject == "" || args.gitlabServer == "") {
+			return nil, err
+		}
+		// Trailing slash trimmed: gitlab.New normalises the GraphQL URL but
+		// builds REST note paths as <serverURL>/api/v4/..., which would double.
+		serverURL = strings.TrimSuffix(firstNonEmpty(args.gitlabServer, serverURL), "/")
+		project = firstNonEmpty(args.gitlabProject, project)
+		// The override names the host the token goes to, so it is host-checked
+		// like the repository URL was.
+		if err := vcsurl.CheckProviderHost(vcsurl.ProviderGitLab, serverURL); err != nil {
+			return nil, err
+		}
+		if err := requireToken(args.gitlabToken, "--gitlab-token", "GITLAB_TOKEN"); err != nil {
+			return nil, err
+		}
+		return gitlab.New(ctx, project, args.gitlabToken, vcsCtx.prNumber, gitlab.Options{
+			ServerURL: serverURL,
+			TLSConfig: tlsConfig,
+			Tag:       args.tag,
+		})
+
+	case vcsurl.ProviderAzureRepos:
+		if err := requireToken(args.azureToken, "--azure-token", "AZURE_DEVOPS_EXT_PAT or SYSTEM_ACCESSTOKEN"); err != nil {
+			return nil, err
+		}
+		// Trimmed here: azure.buildAPIURL appends the repo segment raw, so a
+		// clone-style .git suffix would 404.
+		return azure.New(ctx, vcsurl.TrimRepoURL(vcsCtx.repoURL), args.azureToken, vcsCtx.prNumber, azure.Options{
+			TLSConfig: tlsConfig,
+			Tag:       args.tag,
+		})
+	}
+
+	return nil, fmt.Errorf("posting comments is not supported on %s: set INFRACOST_VCS_PROVIDER to %s, %s or %s",
+		vcsCtx.provider, vcsurl.ProviderGitHub, vcsurl.ProviderGitLab, vcsurl.ProviderAzureRepos)
+}
+
+// resolveGitHubAPIURL turns the override, or the repository URL when there is
+// none, into the APIURL github.New takes: "" for github.com, the base URL for
+// GHES. The override is host-checked too — it names where the token goes.
+func resolveGitHubAPIURL(override, repoURL string) (string, error) {
+	if override == "" {
+		return vcsurl.GitHubAPIURL(repoURL)
+	}
+
+	if err := vcsurl.CheckProviderHost(vcsurl.ProviderGitHub, override); err != nil {
+		return "", err
+	}
+	return vcsurl.GitHubAPIURL(override)
+}
+
+// requireToken fails in newVCSClient rather than at the first API call, so a
+// missing token reads the same as the other resolution errors.
+func requireToken(token, flag, env string) error {
+	if token == "" {
+		return fmt.Errorf("cannot post a pull request comment: set %s or %s", flag, env)
+	}
+	return nil
 }
 
 func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.VCS, results *ScanResult) error {
