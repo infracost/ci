@@ -353,6 +353,27 @@ CGO_ENABLED=0 go build -o "dist/$(go env GOARCH)/infracost-scanner" .
 docker build -t infracost-ci:dev .
 ```
 
+### Cutting a release
+
+Push the tag. Nothing else.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Do not use `gh release create`. The workflow drafts the release itself, builds
+into it, verifies, and publishes last. A release that already exists and is
+published makes the workflow refuse, because drafting over it would 404 every
+pinned download and hand `latest` back to the previous version.
+
+If that happens, delete the release and the tag, then push the tag again:
+
+```bash
+gh release delete v0.1.0 --repo infracost/ci --yes
+git push --delete origin v0.1.0
+```
+
 Pushing a `v*.*.*` tag builds six platforms, attaches `checksums.txt`, publishes the
 release, and pushes `ghcr.io/infracost/ci` for `linux/amd64` and `linux/arm64`. The
 image is only tagged once the archives and the image have both been verified, so a
