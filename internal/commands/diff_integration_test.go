@@ -552,7 +552,9 @@ func TestNewVCSClient(t *testing.T) {
 		repoURL  string
 		args     diffArgs
 		wantType any
-		wantErr  string
+		// wantServer, when set, is the serverURL that reached gitlab.New.
+		wantServer string
+		wantErr    string
 	}{
 		{name: "github", provider: "github", repoURL: testRepoURL,
 			args: diffArgs{githubToken: githubToken}, wantType: &github.GitHub{}},
@@ -566,6 +568,10 @@ func TestNewVCSClient(t *testing.T) {
 			args: diffArgs{gitlabToken: gitlabToken}, wantType: &gitlab.GitLab{}},
 		// A relative-root install derives both values wrong, so the flags
 		// stand in for a path the URL cannot yield.
+		// gitlab.New builds REST note paths as <serverURL>/api/v4/..., so a
+		// trailing slash on the override would give //api/v4/....
+		{name: "gitlab server url trailing slash", provider: "gitlab", repoURL: "https://gitlab.corp/group/repo",
+			args: diffArgs{gitlabToken: gitlabToken, gitlabServer: "https://gitlab.corp/"}, wantServer: "https://gitlab.corp", wantType: &gitlab.GitLab{}},
 		{name: "gitlab relative root overrides", provider: "gitlab", repoURL: "https://host/gitlab/group/repo",
 			args: diffArgs{gitlabToken: gitlabToken, gitlabProject: "group/repo", gitlabServer: "https://host/gitlab"}, wantType: &gitlab.GitLab{}},
 		{name: "gitlab single segment path", provider: "gitlab", repoURL: "https://gitlab.com/actions",
@@ -608,6 +614,10 @@ func TestNewVCSClient(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.IsType(t, tt.wantType, client)
+			if tt.wantServer != "" {
+				field := reflect.ValueOf(client).Elem().FieldByName("serverURL")
+				assert.Equal(t, tt.wantServer, field.String())
+			}
 		})
 	}
 }

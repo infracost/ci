@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/infracost/ci/internal/api"
@@ -224,7 +225,9 @@ func newVCSClient(ctx context.Context, cfg *config.Config, args *diffArgs, vcsCt
 		if err != nil && (args.gitlabProject == "" || args.gitlabServer == "") {
 			return nil, err
 		}
-		serverURL = firstNonEmpty(args.gitlabServer, serverURL)
+		// Trailing slash trimmed: gitlab.New normalises the GraphQL URL but
+		// builds REST note paths as <serverURL>/api/v4/..., which would double.
+		serverURL = strings.TrimSuffix(firstNonEmpty(args.gitlabServer, serverURL), "/")
 		project = firstNonEmpty(args.gitlabProject, project)
 		// The override names the host the token goes to, so it is host-checked
 		// like the repository URL was.
