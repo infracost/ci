@@ -101,3 +101,22 @@ func execPlugins(t *testing.T, argv ...string) (string, error) {
 	err := root.Execute()
 	return out.String(), err
 }
+
+// execDiffArgs parses argv and returns the bound args without resolving or
+// scanning, so the env-then-flag ordering of the client flags is asserted on
+// the real cobra registration.
+func execDiffArgs(t *testing.T, argv ...string) (*config.Config, *diffArgs, error) {
+	t.Helper()
+
+	cfg := new(config.Config)
+	root := newTestRoot(t, cfg)
+
+	cmd, args := diffCommand(cfg, &ScanResult{})
+	cmd.RunE = func(*cobra.Command, []string) error { return nil }
+	root.AddCommand(cmd)
+
+	base := filepath.Join(testdataDir(), "basic", "base")
+	head := filepath.Join(testdataDir(), "basic", "head")
+	root.SetArgs(append([]string{"diff", "--base-path", base, "--head-path", head}, argv...))
+	return cfg, args, root.Execute()
+}

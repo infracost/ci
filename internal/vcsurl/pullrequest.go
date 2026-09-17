@@ -33,9 +33,24 @@ var prPaths = map[string]string{
 	ProviderBitbucket:  "/pull-requests/",
 }
 
-// gitHubHosts are the hosts OwnerRepo will derive from. GHES is excluded:
-// posting to one needs github.Options.APIURL, which the scanner does not set.
+// gitHubHosts are the github.com hosts. A host outside this set is GHES, which
+// GitHubAPIURL turns into an APIURL rather than rejecting.
 var gitHubHosts = []string{"github.com", "www.github.com"}
+
+// providerHosts pins a vendor-hosted host to the only provider that can serve
+// it. Self-managed installs have no fixed hostname, so an absent host is
+// unconstrained rather than invalid.
+var providerHosts = map[string]string{
+	"github.com":     ProviderGitHub,
+	"www.github.com": ProviderGitHub,
+	"gitlab.com":     ProviderGitLab,
+	"dev.azure.com":  ProviderAzureRepos,
+	"bitbucket.org":  ProviderBitbucket,
+}
+
+// visualStudioSuffix matches the older org-scoped Azure Repos hosts,
+// e.g. myorg.visualstudio.com.
+const visualStudioSuffix = ".visualstudio.com"
 
 // Valid reports whether PullRequest can build a URL for provider.
 func Valid(provider string) bool {
@@ -58,7 +73,7 @@ func PullRequest(provider, repoURL string, number int) (string, error) {
 	if err := CheckRepoURL(provider, repoURL); err != nil {
 		return "", err
 	}
-	base := trimRepoURL(repoURL)
+	base := TrimRepoURL(repoURL)
 
 	path, ok := prPaths[provider]
 	if !ok {
@@ -109,34 +124,74 @@ func ParsePullRequest(provider, prURL string) (string, int, error) {
 	return repoURL, number, nil
 }
 
-// CheckGitHubHost refuses the hosts a comment cannot reach. It holds even when
-// the owner and repo are given: github.New has no APIURL, so a comment on any
-// other host would send that host's token to api.github.com.
-func CheckGitHubHost(repoURL string) error {
-	// Runs before the host is known good, and never echoes the URL: a
-	// credentialed clone URL would otherwise put its token in the error.
-	if err := CheckRepoURL(ProviderGitHub, repoURL); err != nil {
+// CheckProviderHost rejects a repository URL whose host belongs to a different
+// provider, so a GitLab token cannot be sent to github.com. An unrecognised
+// host is allowed: it may be GHES, self-managed GitLab or Azure DevOps Server.
+func CheckProviderHost(provider, repoURL string) error {
+	// Never echoes the URL: a credentialed clone URL would put its token in
+	// the error.
+	if err := CheckRepoURL(provider, repoURL); err != nil {
 		return err
 	}
 
-	// Hostname() lowercases nothing but strips the port and IPv6 brackets;
-	// hosts are case-insensitive and url.Parse does not normalise them.
-	u, err := url.Parse(repoURL)
-	if err != nil || !slices.Contains(gitHubHosts, strings.ToLower(u.Hostname())) {
-		return fmt.Errorf("cannot post a pull request comment: the repository URL host is not github.com")
+	host := hostname(repoURL)
+	want, known := providerHosts[host]
+	if !known && strings.HasSuffix(host, visualStudioSuffix) {
+		want, known = ProviderAzureRepos, true
+	}
+	if known && want != provider {
+		return fmt.Errorf("repository URL host %q is a %s host, but INFRACOST_VCS_PROVIDER is %q", host, want, provider)
 	}
 
 	return nil
 }
 
-// OwnerRepo extracts the owner and repository name from a GitHub web URL. Only
-// github.com: any host would redirect comments to a mistyped URL's repository.
-func OwnerRepo(repoURL string) (string, string, error) {
-	if err := CheckGitHubHost(repoURL); err != nil {
+// GitHubAPIURL returns the GHES base URL to talk to, or "" for github.com.
+// Empty is not cosmetic: github.newClient takes the non-enterprise path only
+// when APIURL is empty, and appends /api/graphql to anything else.
+func GitHubAPIURL(repoURL string) (string, error) {
+	if err := CheckRepoURL(ProviderGitHub, repoURL); err != nil {
+		return "", err
+	}
+
+	if slices.Contains(gitHubHosts, hostname(repoURL)) {
+		return "", nil
+	}
+
+	u, _ := url.Parse(repoURL) // CheckRepoURL parsed it already.
+	return fmt.Sprintf("%s://%s", u.Scheme, u.Host), nil
+}
+
+// GitLabProject splits a GitLab repository web URL into the server to talk to
+// and the full project path the API keys on.
+func GitLabProject(repoURL string) (string, string, error) {
+	if err := CheckRepoURL(ProviderGitLab, repoURL); err != nil {
 		return "", "", err
 	}
 
-	u, _ := url.Parse(repoURL) // CheckGitHubHost parsed it already.
+	u, _ := url.Parse(repoURL) // CheckRepoURL parsed it already.
+	serverURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+
+	// The whole path, not the last two segments: gitlab.New binds
+	// project(fullPath:), which 404s silently on a truncated subgroup path.
+	project := strings.Trim(TrimRepoURL(u.Path), "/")
+	parts := strings.Split(project, "/")
+	if len(parts) < 2 || slices.Contains(parts, "") {
+		return "", "", fmt.Errorf("cannot derive the GitLab project: the repo URL path must be /<group>/<project>, or set --gitlab-project and --gitlab-server-url")
+	}
+
+	return serverURL, project, nil
+}
+
+// OwnerRepo extracts the owner and repository name from a GitHub web URL. The
+// host is not constrained here: GitHubAPIURL sends the token to whichever host
+// this URL names, so a GHES URL is derived from, not rejected.
+func OwnerRepo(repoURL string) (string, string, error) {
+	if err := CheckRepoURL(ProviderGitHub, repoURL); err != nil {
+		return "", "", err
+	}
+
+	u, _ := url.Parse(repoURL) // CheckRepoURL parsed it already.
 
 	// The slash goes first: a path of /owner/repo.git/ keeps its suffix if the
 	// two run the other way round.
@@ -148,9 +203,22 @@ func OwnerRepo(repoURL string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
-// trimRepoURL drops the trailing slash and .git suffix a clone URL carries.
-func trimRepoURL(repoURL string) string {
+// TrimRepoURL drops the trailing slash and .git suffix a clone URL carries.
+// Exported because azure.buildAPIURL appends the repo segment untrimmed, so a
+// .git suffix would become a 404ing API path.
+func TrimRepoURL(repoURL string) string {
 	return strings.TrimSuffix(strings.TrimSuffix(repoURL, "/"), ".git")
+}
+
+// hostname lowercases the host: hosts are case-insensitive and url.Parse does
+// not normalise them. Hostname() also strips the port and IPv6 brackets. The
+// FQDN trailing dot goes too, or "github.com." would miss providerHosts.
+func hostname(repoURL string) string {
+	u, err := url.Parse(repoURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 }
 
 // CheckRepoURL constrains the metadata URL, not the transport: nothing in the

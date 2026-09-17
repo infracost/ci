@@ -66,17 +66,8 @@ func resolvePullRequest(provider, repoURL, prURL string, prNumber int) (string, 
 }
 
 // resolveOwnerRepo derives the GitHub owner and repository from the repo URL.
-// The flags override the path, not the host.
-func resolveOwnerRepo(provider, repoURL, owner, repo string) (string, string, error) {
-	// Both checked before the flags: they name a github.com repository, so
-	// accepting them elsewhere would send that host's token to api.github.com.
-	if provider != vcsurl.ProviderGitHub {
-		return "", "", fmt.Errorf("posting comments is only supported on github, not %q", provider)
-	}
-	if err := vcsurl.CheckGitHubHost(repoURL); err != nil {
-		return "", "", err
-	}
-
+// The flags override the path, not the host: the host decides the API URL.
+func resolveOwnerRepo(repoURL, owner, repo string) (string, string, error) {
 	if owner != "" && repo != "" {
 		return owner, repo, nil
 	}

@@ -1,6 +1,9 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"os"
 
 	"github.com/infracost/ci/internal/api/dashboard"
@@ -26,6 +29,16 @@ type Config struct {
 
 	// DisableDashboard disables uploading scan results to the Infracost dashboard.
 	DisableDashboard bool `env:"INFRACOST_CI_DISABLE_DASHBOARD"`
+
+	// TLSCACertFile is a PEM bundle trusted in addition to the system pool,
+	// for a self-managed VCS server behind a private CA. VCS-scoped in its
+	// name: the dashboard, pricing and events clients keep the system pool.
+	TLSCACertFile string `env:"INFRACOST_CI_VCS_TLS_CA_CERT_FILE" flag:"vcs-tls-ca-cert-file" usage:"PEM CA bundle to trust when talking to the VCS server"`
+
+	// TLSInsecureSkipVerify disables VCS certificate verification. A
+	// man-in-the-middle switch on a request carrying a VCS token: TLSConfig
+	// warns when it is on, and TLSCACertFile covers the legitimate case.
+	TLSInsecureSkipVerify bool `env:"INFRACOST_CI_VCS_TLS_INSECURE_SKIP_VERIFY" flag:"vcs-tls-insecure-skip-verify" usage:"Skip VCS TLS certificate verification (prefer --vcs-tls-ca-cert-file)"`
 
 	// VCSProvider is the VCS hosting the repository — github, gitlab, azure_repos
 	// or bitbucket. Unprefixed on purpose: INFRACOST_VCS_PROVIDER is the v0.1
@@ -67,4 +80,39 @@ func (config *Config) Process() {
 	events.RegisterMetadata("dashboardEnabled", !config.DisableDashboard)
 	events.RegisterMetadata("environment", config.Environment.String())
 	events.RegisterMetadata("isDefaultPricingApiEndpoint", config.PricingEndpoint == "https://pricing.api.infracost.io")
+}
+
+// TLSConfig builds the TLS configuration the VCS clients use, or nil when
+// neither variable is set — which is what their Options already expect.
+func (config *Config) TLSConfig() (*tls.Config, error) {
+	if config.TLSCACertFile == "" && !config.TLSInsecureSkipVerify {
+		return nil, nil
+	}
+
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+
+	if config.TLSInsecureSkipVerify {
+		logging.Warnf("INFRACOST_CI_VCS_TLS_INSECURE_SKIP_VERIFY is set: TLS certificates are not verified, and the VCS token is sent over an unauthenticated connection")
+		cfg.InsecureSkipVerify = true //nolint:gosec // opt-in, and warned about above
+	}
+
+	if config.TLSCACertFile != "" {
+		pem, err := os.ReadFile(config.TLSCACertFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read INFRACOST_CI_VCS_TLS_CA_CERT_FILE: %w", err)
+		}
+		// Appended to the system pool, not replacing it: a private CA is
+		// usually additional to the public ones. Failing to load the system
+		// pool is an error, not a silent substitution of the private CA.
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load the system certificate pool: %w", err)
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("no certificates found in INFRACOST_CI_VCS_TLS_CA_CERT_FILE %q", config.TLSCACertFile)
+		}
+		cfg.RootCAs = pool
+	}
+
+	return cfg, nil
 }
