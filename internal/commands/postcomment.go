@@ -15,7 +15,7 @@ import (
 type retryPolicy struct {
 	attempts   int           // total attempts, including the first
 	baseDelay  time.Duration // doubled per attempt when there is no Retry-After
-	waitBudget time.Duration // longest total wait worth honouring
+	waitBudget time.Duration // longest Retry-After worth honouring, compared before jitter
 }
 
 // minWait floors every wait, so a policy with no baseDelay cannot fire its
