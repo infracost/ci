@@ -128,7 +128,7 @@ func TestFillBitbucketPullRequest(t *testing.T) {
 			token:  "repo-access-token", status: http.StatusOK,
 		},
 		{
-			// A branches: pipeline sets no BITBUCKET_PR_ID.
+			// A branch pipeline sets no BITBUCKET_PR_ID.
 			name:   "no pull request",
 			vcsCtx: diffContext{provider: "bitbucket"},
 			token:  "repo-access-token", status: http.StatusOK,
