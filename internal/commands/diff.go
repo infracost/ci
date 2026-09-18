@@ -190,9 +190,10 @@ func resolveDiffContext(ctx context.Context, cfg *config.Config, args *diffArgs)
 		pipelineRunID:     args.pipelineRunID,
 	}
 
-	// After the rest: Azure is the one platform whose title and author need a
-	// call, and it only makes it for the fields still empty.
+	// After the rest: Azure and Bitbucket are the platforms whose title and
+	// author need a call, and each only makes it for the fields still empty.
 	fillAzurePullRequest(ctx, cfg, args.azureToken, &vcsCtx)
+	fillBitbucketPullRequest(ctx, cfg, args, &vcsCtx)
 
 	return vcsCtx, nil
 }
@@ -266,6 +267,11 @@ func newVCSClient(ctx context.Context, cfg *config.Config, args *diffArgs, vcsCt
 		}
 		serverURL = strings.TrimSuffix(firstNonEmpty(args.bitbucketSrv, serverURL), "/")
 		repo = firstNonEmpty(args.bitbucketRepo, repo)
+		// An override that trims away to nothing must not read as Cloud below:
+		// the private instance's token would go to Atlassian.
+		if args.bitbucketSrv != "" && serverURL == "" {
+			return nil, fmt.Errorf("--bitbucket-server-url is not a URL")
+		}
 		// Empty is Bitbucket Cloud, which bitbucket.New takes as the default.
 		// A set one names the host the token goes to, so it is host-checked
 		// like the repository URL was.
