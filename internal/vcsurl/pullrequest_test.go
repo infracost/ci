@@ -434,3 +434,49 @@ func TestCheckProviderHost(t *testing.T) {
 		})
 	}
 }
+
+func TestBitbucketProject(t *testing.T) {
+	tests := []struct {
+		name       string
+		repoURL    string
+		wantServer string
+		wantRepo   string
+		wantErr    string
+	}{
+		{name: "cloud", repoURL: "https://bitbucket.org/acme/infra", wantRepo: "acme/infra"},
+		{name: "cloud clone suffix", repoURL: "https://bitbucket.org/acme/infra.git", wantRepo: "acme/infra"},
+		{name: "cloud trailing slash", repoURL: "https://bitbucket.org/acme/infra/", wantRepo: "acme/infra"},
+		{name: "server", repoURL: "https://bb.corp/projects/PROJ/repos/infra",
+			wantServer: "https://bb.corp", wantRepo: "PROJ/infra"},
+		{name: "server context path", repoURL: "https://bb.corp/stash/projects/PROJ/repos/infra",
+			wantServer: "https://bb.corp/stash", wantRepo: "PROJ/infra"},
+		{name: "server nested context path", repoURL: "https://bb.corp/tools/stash/projects/PROJ/repos/infra",
+			wantServer: "https://bb.corp/tools/stash", wantRepo: "PROJ/infra"},
+		{name: "cloud single segment", repoURL: "https://bitbucket.org/infra",
+			wantErr: "must be /<workspace>/<repo>"},
+		{name: "cloud extra segment", repoURL: "https://bitbucket.org/acme/infra/src/main",
+			wantErr: "must be /<workspace>/<repo>"},
+		{name: "server clone path", repoURL: "https://bb.corp/scm/PROJ/infra.git",
+			wantErr: "must be /projects/<key>/repos/<repo>"},
+		{name: "server missing repo slug", repoURL: "https://bb.corp/projects/PROJ/repos",
+			wantErr: "must be /projects/<key>/repos/<repo>"},
+		{name: "credentialed URL", repoURL: "https://user:pass@bitbucket.org/acme/infra",
+			wantErr: "must not contain credentials"},
+		{name: "clone URL", repoURL: "git@bitbucket.org:acme/infra.git",
+			wantErr: "must be an http(s) web URL"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, repo, err := BitbucketProject(tt.repoURL)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantServer, server)
+			assert.Equal(t, tt.wantRepo, repo)
+		})
+	}
+}

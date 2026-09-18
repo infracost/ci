@@ -46,8 +46,14 @@ type Config struct {
 	VCSProvider string `env:"INFRACOST_VCS_PROVIDER" flag:"vcs-provider" usage:"VCS provider hosting the repository"`
 
 	// VCS is the rest of the INFRACOST_VCS_* contract, hydrated from the
-	// environment only. See vcs.go for why none of it carries a flag tag.
+	// environment and then from the CI platform. See vcs.go for why none of it
+	// carries a flag tag.
 	VCS VCS
+
+	// VCSInferences is what InferVCS filled and what the environment kept.
+	// Held rather than logged at the time: inference runs before PreRun
+	// configures logging.
+	VCSInferences Inferences
 
 	// JSON toggles JSON output for logs. Registered here so sub-configs that
 	// bind via `flagvalue:"json"` (e.g. logging) have a flag to reference.
@@ -80,6 +86,8 @@ func (config *Config) Process() {
 	events.RegisterMetadata("dashboardEnabled", !config.DisableDashboard)
 	events.RegisterMetadata("environment", config.Environment.String())
 	events.RegisterMetadata("isDefaultPricingApiEndpoint", config.PricingEndpoint == "https://pricing.api.infracost.io")
+	events.RegisterMetadata("vcsInferred", config.VCSInferences.Inferred)
+	logging.Debugf("%s", config.VCSInferences)
 }
 
 // TLSConfig builds the TLS configuration the VCS clients use, or nil when

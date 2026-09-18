@@ -16,14 +16,14 @@ RUN apt-get update && \
 ENV INFRACOST_CLI_PLUGIN_CACHE_DIRECTORY=/opt/infracost/plugins
 
 ARG TARGETARCH
-COPY dist/${TARGETARCH}/infracost-scanner /usr/local/bin/infracost-scanner
+COPY dist/${TARGETARCH}/infracost-scanner /usr/local/bin/scanner
 
 # install.go writes the directory and binaries 0750 as root, which denies
 # every docker run --user. list exits non-zero on a plugin that installs but
 # will not answer GetPluginInfo, so the build fails instead of image-verify.
-RUN infracost-scanner plugins install && \
+RUN scanner plugins install && \
     chmod -R a+rX /opt/infracost/plugins && \
-    infracost-scanner plugins list
+    scanner plugins list
 
 FROM debian:trixie-slim
 
@@ -47,8 +47,12 @@ ENV INFRACOST_CLI_PLUGIN_CACHE_DIRECTORY=/opt/infracost/plugins \
 COPY --from=plugins /opt/infracost/plugins /opt/infracost/plugins
 
 ARG TARGETARCH
-COPY dist/${TARGETARCH}/infracost-scanner /usr/local/bin/infracost-scanner
+COPY dist/${TARGETARCH}/infracost-scanner /usr/local/bin/scanner
+
+# The 0.1 and latest tags move under pipelines that already call the binary by
+# its released name, so the old name stays as a link.
+RUN ln -s scanner /usr/local/bin/infracost-scanner
 
 # Only docker run consults this; a GitHub Actions container: job replaces it
 # with its own shell, so the entrypoint takes subcommands.
-ENTRYPOINT ["/usr/local/bin/infracost-scanner"]
+ENTRYPOINT ["/usr/local/bin/scanner"]

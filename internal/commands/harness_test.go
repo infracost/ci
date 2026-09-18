@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -22,6 +23,13 @@ func newTestRoot(t *testing.T, cfg *config.Config) *cobra.Command {
 	root := &cobra.Command{Use: "scanner", SilenceUsage: true, SilenceErrors: true}
 	diags := process.PreProcess(cfg, root.PersistentFlags())
 	require.Zero(t, diags.Len(), "PreProcess reported %s", diags)
+	// main infers between PreProcess and the flag registration below, so the
+	// ordering these tests exercise is the real one.
+	//
+	// A platform name platformValues does not know infers nothing, which is how
+	// the CI running the suite is kept out of these tests.
+	t.Setenv("INFRACOST_CI_PLATFORM", "test_harness")
+	cfg.VCSInferences = config.InferVCS(cfg)
 	return root
 }
 
@@ -37,7 +45,7 @@ func execDiff(t *testing.T, argv ...string) (diffContext, error) {
 	var captured diffContext
 	cmd.RunE = func(*cobra.Command, []string) error {
 		var err error
-		captured, err = resolveDiffContext(cfg, args)
+		captured, err = resolveDiffContext(context.Background(), cfg, args)
 		return err
 	}
 	root.AddCommand(cmd)

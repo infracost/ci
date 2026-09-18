@@ -64,6 +64,10 @@ func run() int {
 	// commands are built first.
 	diags = diags.Merge(process.PreProcess(cfg, cmd.PersistentFlags()))
 
+	// Between the two: the flag defaults below read cfg.VCS, and an
+	// INFRACOST_VCS_* hydrated above must still win over the platform.
+	cfg.VCSInferences = config.InferVCS(cfg)
+
 	var results commands.ScanResult
 	cmd.AddCommand(commands.Diff(cfg, &results))
 	cmd.AddCommand(commands.Scan(cfg))

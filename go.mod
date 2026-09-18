@@ -8,7 +8,7 @@ require (
 	github.com/infracost/config v0.18.0
 	github.com/infracost/go-proto v1.40.0
 	github.com/infracost/proto v1.167.0
-	github.com/infracost/vcs v0.9.0
+	github.com/infracost/vcs v0.10.0
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10

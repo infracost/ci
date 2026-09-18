@@ -2,7 +2,8 @@
 
 Cloud cost estimates for infrastructure code, in your CI pipeline.
 
-`infracost-scanner` is a single Go binary that scans directories of infrastructure
+`infracost-scanner` is a single Go binary — `scanner` inside the container image —
+that scans directories of infrastructure
 code, calculates the cost difference between two branches, posts a comment on the
 pull request, and uploads the run to [Infracost Cloud](https://dashboard.infracost.io).
 It embeds the Infracost CLI as a library rather than shelling out to it.
@@ -17,7 +18,7 @@ It embeds the Infracost CLI as a library rather than shelling out to it.
 ```mermaid
 flowchart LR
   base[base checkout] --> scanner
-  head[head checkout] --> scanner["infracost-scanner diff"]
+  head[head checkout] --> scanner["scanner diff"]
   scanner <--> cloud[("Infracost Cloud<br/>policies · guardrails · budgets")]
   scanner --> comment["PR comment"]
   scanner --> gate{"blocking<br/>violation?"}
@@ -52,14 +53,12 @@ sequenceDiagram
 | --- | :---: | :---: | :---: | :---: |
 | GitHub | ✅ | ✅ | ✅ | ✅ |
 | GitLab | ✅ | ✅ | ✅ | ✅ |
-| Bitbucket | ✅ | — | — | ✅ |
+| Bitbucket | ✅ | ✅ | ✅ | ✅ |
 | Azure Repos | ✅ | ✅ | ✅ | ✅ |
 
-Bitbucket cannot post comments, and `diff` always posts, so Bitbucket is `scan` and
-`status` only — results appear in the dashboard, not in the pull request.
-
-Self-managed servers work: GitHub Enterprise Server, self-managed GitLab and Azure
-DevOps Server are all derived from `INFRACOST_VCS_REPOSITORY_URL`.
+Self-managed servers work: GitHub Enterprise Server, self-managed GitLab, Bitbucket
+Data Center and Azure DevOps Server are all derived from
+`INFRACOST_VCS_REPOSITORY_URL`.
 
 ## Getting started
 
@@ -98,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: head
-      - run: infracost-scanner diff --base-path base --head-path head
+      - run: scanner diff --base-path base --head-path head
 ```
 
 On GitHub Enterprise Server nothing extra is needed: the API URL is derived from
@@ -131,7 +130,7 @@ infracost:
     - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - git worktree add base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - git worktree add head HEAD
-    - infracost-scanner diff --base-path base --head-path head
+    - scanner diff --base-path base --head-path head
 ```
 
 `INFRACOST_CLI_AUTHENTICATION_TOKEN` and `GITLAB_TOKEN` both go in masked CI/CD
@@ -152,18 +151,46 @@ To scan the default branch instead, run `scan --path .` and drop the
 ```yaml
 image: ghcr.io/infracost/ci:0.1
 
+# Full history: the shallow default may not contain the destination branch.
+clone:
+  depth: full
+
 pipelines:
-  branches:
-    main:
+  pull-requests:
+    '**':
       - step:
           name: Infracost
           script:
-            - export INFRACOST_VCS_PROVIDER=bitbucket
+            # Inference reads BITBUCKET_GIT_HTTP_ORIGIN, which is http.
             - export INFRACOST_VCS_REPOSITORY_URL="https://bitbucket.org/$BITBUCKET_REPO_FULL_NAME"
-            - export INFRACOST_VCS_BRANCH=$BITBUCKET_BRANCH
-            - export INFRACOST_VCS_PIPELINE_RUN_ID=$BITBUCKET_BUILD_NUMBER
-            - infracost-scanner scan --path .
+            - git fetch origin "$BITBUCKET_PR_DESTINATION_BRANCH"
+            - git worktree add base "origin/$BITBUCKET_PR_DESTINATION_BRANCH"
+            - git worktree add head HEAD
+            - scanner diff --base-path base --head-path head
+  branches:
+    main:
+      - step:
+          name: Infracost baseline
+          script:
+            - export INFRACOST_VCS_REPOSITORY_URL="https://bitbucket.org/$BITBUCKET_REPO_FULL_NAME"
+            - scanner scan --path .
 ```
+
+Bitbucket runs each `script:` line in its own shell rather than through the
+image entrypoint, so the line names the binary: `scanner diff`, and
+`scanner scan` for a baseline run.
+
+`INFRACOST_CLI_AUTHENTICATION_TOKEN` and `BITBUCKET_TOKEN` both go in secured
+repository variables. `BITBUCKET_TOKEN` is a repository or workspace access token
+with **pull requests: write** scope, or `user:app-password` for Basic auth.
+
+The provider, pull request number, branches and run id are inferred from the
+`BITBUCKET_*` variables. `BITBUCKET_PR_ID` only exists in a `pull-requests:`
+pipeline, which is why `diff` lives there and the branch pipeline runs `scan`.
+
+Bitbucket Data Center: set `INFRACOST_VCS_REPOSITORY_URL` to the
+`/projects/<key>/repos/<slug>` web URL, or pass `--bitbucket-repo` and
+`--bitbucket-server-url`.
 
 ### Azure Pipelines
 
@@ -187,7 +214,7 @@ jobs:
           git fetch origin "$(System.PullRequest.TargetBranchName)"
           git worktree add base "origin/$(System.PullRequest.TargetBranchName)"
           git worktree add head HEAD
-      - script: infracost-scanner diff --base-path base --head-path head
+      - script: scanner diff --base-path base --head-path head
         env:
           INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
           INFRACOST_VCS_PROVIDER: azure_repos
@@ -212,7 +239,7 @@ the project URL. `Build.Repository.Uri` already is one.
 
 | Command | What it does |
 | --- | --- |
-| `diff --base-path <dir> --head-path <dir>` | Scan both checkouts, compute the cost diff, post or update the PR comment, upload the run. Exits 1 on a new blocking guardrail or policy violation. Comments on GitHub, GitLab and Azure Repos; Bitbucket is `scan` only. |
+| `diff --base-path <dir> --head-path <dir>` | Scan both checkouts, compute the cost diff, post or update the PR comment, upload the run. Exits 1 on a new blocking guardrail or policy violation. Comments on GitHub, GitLab, Azure Repos and Bitbucket. |
 | `scan --path <dir>` | Scan one directory and upload a branch run. |
 | `status --status OPEN\|MERGED\|CLOSED` | Update the pull request state in the dashboard. |
 | `plugins install\|list\|detect` | Install the parser and provider plugins, report their versions, or print the projects they identify. No auth token needed. |
@@ -221,7 +248,7 @@ the project URL. `Build.Repository.Uri` already is one.
 `infracost-comment`). Changing it on a repository that already has an Infracost
 comment means the next run cannot find the old one and posts a second.
 
-Run `infracost-scanner <command> --help` for the full flag list. Most VCS metadata
+Run `scanner <command> --help` for the full flag list. Most VCS metadata
 can come from a flag or an `INFRACOST_VCS_*` variable; the flag wins when both are
 set. Paths are flags only.
 
@@ -237,7 +264,7 @@ set. Paths are flags only.
 | `INFRACOST_VCS_BRANCH`, `INFRACOST_VCS_BASE_BRANCH` | Fall back to the checkout's git metadata. |
 | `INFRACOST_VCS_PIPELINE_RUN_ID` | Links the run back to the CI job. |
 | `INFRACOST_CI_DISABLE_DASHBOARD` | Skip uploading results. |
-| `GITHUB_TOKEN`, `GITLAB_TOKEN`, `AZURE_DEVOPS_EXT_PAT` or `SYSTEM_ACCESSTOKEN` | Comment token for the provider `diff` is running against. |
+| `GITHUB_TOKEN`, `GITLAB_TOKEN`, `BITBUCKET_TOKEN`, `AZURE_DEVOPS_EXT_PAT` or `SYSTEM_ACCESSTOKEN` | Comment token for the provider `diff` is running against. |
 | `INFRACOST_CI_VCS_TLS_CA_CERT_FILE` | PEM bundle trusted in addition to the system pool, for a self-managed VCS behind a private CA. VCS only — the dashboard, pricing and events clients use the system pool. |
 | `INFRACOST_CI_VCS_TLS_INSECURE_SKIP_VERIFY` | Skip VCS certificate verification. The token then travels over an unauthenticated connection — prefer the CA file. Warns when on. |
 

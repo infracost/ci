@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"testing"
 
 	"github.com/infracost/ci/internal/config"
@@ -75,7 +76,7 @@ func TestResolveDiffContext_RequiresBuildablePullRequestURL(t *testing.T) {
 			// prURL is a flag bound to INFRACOST_VCS_PULL_REQUEST_URL.
 			args := &diffArgs{repoURL: tt.repoURL, prURL: tt.prURL, prNumber: tt.prNumber}
 
-			_, err := resolveDiffContext(cfg, args)
+			_, err := resolveDiffContext(context.Background(), cfg, args)
 
 			require.Error(t, err)
 			assert.EqualError(t, err, tt.wantErr)
