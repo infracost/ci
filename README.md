@@ -57,13 +57,44 @@ sequenceDiagram
 | Azure Repos | ✅ | ✅ | ✅ | ✅ |
 
 Self-managed servers work: GitHub Enterprise Server, self-managed GitLab, Bitbucket
-Data Center and Azure DevOps Server are all derived from
-`INFRACOST_VCS_REPOSITORY_URL`.
+Data Center and Azure DevOps Server are all derived from the repository URL.
 
 ## Getting started
 
-You need an [Infracost API key](https://dashboard.infracost.io) in
-`INFRACOST_CLI_AUTHENTICATION_TOKEN`.
+Two secrets, and nothing else. Set an [Infracost API key](https://dashboard.infracost.io)
+in `INFRACOST_CLI_AUTHENTICATION_TOKEN`, and a token the provider lets you comment
+with. The repository, pull request, branches and run id come from the CI platform's
+own variables.
+
+### What is inferred
+
+| Setting | GitHub Actions | GitLab CI | Bitbucket Pipelines | Azure Pipelines |
+| --- | --- | --- | --- | --- |
+| Detected by | `GITHUB_ACTIONS` | `GITLAB_CI` | `BITBUCKET_*` | `SYSTEM_COLLECTIONURI` |
+| Provider | `github` | `gitlab` | `bitbucket` | `azure_repos`, or `github` for a GitHub-backed repo |
+| Repository URL | `GITHUB_SERVER_URL` + `GITHUB_REPOSITORY` | `CI_PROJECT_URL` | `BITBUCKET_GIT_HTTP_ORIGIN` † | `BUILD_REPOSITORY_URI` |
+| Pull request id | event payload | `CI_MERGE_REQUEST_IID` | `BITBUCKET_PR_ID` | `SYSTEM_PULLREQUEST_PULLREQUESTID` |
+| Branch | `GITHUB_HEAD_REF` | `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` | `BITBUCKET_BRANCH` | `SYSTEM_PULLREQUEST_SOURCEBRANCH` |
+| Base branch | `GITHUB_BASE_REF` | `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` | `BITBUCKET_PR_DESTINATION_BRANCH` | `SYSTEM_PULLREQUEST_TARGETBRANCH` |
+| Pipeline run id | `GITHUB_RUN_ID` | `CI_PIPELINE_ID` | `BITBUCKET_BUILD_NUMBER` | `BUILD_BUILDID` |
+| Pull request title | event payload | `CI_MERGE_REQUEST_TITLE` | API lookup, needs the comment token | API lookup, needs the comment token |
+| Pull request author | event payload | `CI_COMMIT_AUTHOR` (commit author) | API lookup, needs the comment token | `BUILD_REQUESTEDFOR` |
+| Pull request labels | event payload | `CI_MERGE_REQUEST_LABELS` | — | — |
+| **Comment token — yours to set** | `GITHUB_TOKEN` | `GITLAB_TOKEN` | `BITBUCKET_TOKEN` | `SYSTEM_ACCESSTOKEN` or `AZURE_DEVOPS_EXT_PAT` |
+
+*Event payload* is the `pull_request` object in `GITHUB_EVENT_PATH`: Actions has no
+predefined variable for any of those four.
+
+† Bitbucket sets that one to an `http://` URL, which keys a second repository on the
+dashboard. The example below overrides it — the one line you still have to copy.
+
+On a branch build with no pull request, the branch falls back to `GITHUB_REF_NAME`,
+`CI_COMMIT_BRANCH` and `BUILD_SOURCEBRANCHNAME` respectively.
+
+Any `INFRACOST_VCS_*` you set yourself wins over the inferred value — see
+[Configuration](#configuration). On any other CI platform nothing is inferred, so set
+them all. `--debug` prints one line naming what was inferred and what your environment
+overrode.
 
 ### GitHub Actions
 
@@ -81,14 +112,6 @@ jobs:
     env:
       INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      INFRACOST_VCS_PROVIDER: github
-      INFRACOST_VCS_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
-      INFRACOST_VCS_PULL_REQUEST_ID: ${{ github.event.pull_request.number }}
-      INFRACOST_VCS_PULL_REQUEST_TITLE: ${{ github.event.pull_request.title }}
-      INFRACOST_VCS_PULL_REQUEST_AUTHOR: ${{ github.event.pull_request.user.login }}
-      INFRACOST_VCS_BRANCH: ${{ github.head_ref }}
-      INFRACOST_VCS_BASE_BRANCH: ${{ github.base_ref }}
-      INFRACOST_VCS_PIPELINE_RUN_ID: ${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,15 +123,15 @@ jobs:
       - run: scanner diff --base-path base --head-path head
 ```
 
-On GitHub Enterprise Server nothing extra is needed: the API URL is derived from
-`INFRACOST_VCS_REPOSITORY_URL`. Override it with `--github-api-url` if it differs.
-That flag wants the **base** server URL (the shape of `GITHUB_SERVER_URL`), not
-`GITHUB_API_URL` — the latter ends `/api/v3`, and `/api/graphql` is appended to
-whatever it is given. It is a flag only: `GITHUB_SERVER_URL` is `https://github.com`
-on github.com, which is not an API URL.
-
 The image entrypoint is the scanner, but a `container:` job replaces it with its own
 shell — so the step names the binary rather than passing a subcommand to the image.
+
+On GitHub Enterprise Server nothing extra is needed: the API URL is derived from the
+inferred repository URL. Override it with `--github-api-url` if it differs. That flag
+wants the **base** server URL (the shape of `GITHUB_SERVER_URL`), not `GITHUB_API_URL`
+— the latter ends `/api/v3`, and `/api/graphql` is appended to whatever it is given.
+It is a flag only: `GITHUB_SERVER_URL` is `https://github.com` on github.com, which is
+not an API URL.
 
 ### GitLab CI
 
@@ -120,12 +143,6 @@ infracost:
   variables:
     # Full history: the shallow default may not contain the target branch.
     GIT_DEPTH: 0
-    INFRACOST_VCS_PROVIDER: gitlab
-    INFRACOST_VCS_REPOSITORY_URL: $CI_PROJECT_URL
-    INFRACOST_VCS_PULL_REQUEST_ID: $CI_MERGE_REQUEST_IID
-    INFRACOST_VCS_BRANCH: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
-    INFRACOST_VCS_BASE_BRANCH: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
-    INFRACOST_VCS_PIPELINE_RUN_ID: $CI_PIPELINE_ID
   script:
     - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - git worktree add base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
@@ -137,14 +154,11 @@ infracost:
 variables. `GITLAB_TOKEN` needs `api` scope to post notes — `CI_JOB_TOKEN` cannot,
 so it is deliberately not a fallback.
 
-`INFRACOST_VCS_PULL_REQUEST_ID` must be the project-scoped `iid`, not the global
-merge request id. Self-managed GitLab needs nothing extra: the server URL is
-derived from `INFRACOST_VCS_REPOSITORY_URL`. A GitLab served from a relative root
-(`https://host/gitlab/group/repo`) needs `--gitlab-server-url` and
-`--gitlab-project`.
+Self-managed GitLab needs nothing extra: the server URL is derived from
+`CI_PROJECT_URL`. A GitLab served from a relative root
+(`https://host/gitlab/group/repo`) needs `--gitlab-server-url` and `--gitlab-project`.
 
-To scan the default branch instead, run `scan --path .` and drop the
-`INFRACOST_VCS_PULL_REQUEST_ID` variable.
+To scan the default branch instead, drop the `rules:` and run `scan --path .`.
 
 ### Bitbucket Pipelines
 
@@ -161,7 +175,7 @@ pipelines:
       - step:
           name: Infracost
           script:
-            # Inference reads BITBUCKET_GIT_HTTP_ORIGIN, which is http.
+            # BITBUCKET_GIT_HTTP_ORIGIN is http, so set the https web URL.
             - export INFRACOST_VCS_REPOSITORY_URL="https://bitbucket.org/$BITBUCKET_REPO_FULL_NAME"
             - git fetch origin "$BITBUCKET_PR_DESTINATION_BRANCH"
             - git worktree add base "origin/$BITBUCKET_PR_DESTINATION_BRANCH"
@@ -176,17 +190,19 @@ pipelines:
             - scanner scan --path .
 ```
 
-Bitbucket runs each `script:` line in its own shell rather than through the
-image entrypoint, so the line names the binary: `scanner diff`, and
-`scanner scan` for a baseline run.
+Bitbucket ignores the image's entrypoint and runs the `script:` lines itself, so the
+line names the binary.
 
 `INFRACOST_CLI_AUTHENTICATION_TOKEN` and `BITBUCKET_TOKEN` both go in secured
 repository variables. `BITBUCKET_TOKEN` is a repository or workspace access token
 with **pull requests: write** scope, or `user:app-password` for Basic auth.
 
-The provider, pull request number, branches and run id are inferred from the
-`BITBUCKET_*` variables. `BITBUCKET_PR_ID` only exists in a `pull-requests:`
-pipeline, which is why `diff` lives there and the branch pipeline runs `scan`.
+`BITBUCKET_PR_ID` only exists in a `pull-requests:` pipeline, which is why `diff`
+lives there and the branch pipeline runs `scan`.
+
+Bitbucket has no predefined variable for the pull request title or author, so `diff`
+reads them from the pull request API with the same `BITBUCKET_TOKEN` it comments with.
+The token is required either way: `diff` fails without it.
 
 Bitbucket Data Center: set `INFRACOST_VCS_REPOSITORY_URL` to the
 `/projects/<key>/repos/<slug>` web URL, or pass `--bitbucket-repo` and
@@ -201,9 +217,6 @@ jobs:
     # branch to fetch. Run scan --path . there instead.
     condition: eq(variables['Build.Reason'], 'PullRequest')
     container: ghcr.io/infracost/ci:0.1
-    variables:
-      # Build.SourceBranchName is "merge" on a pull request build.
-      headBranch: $[ replace(variables['System.PullRequest.SourceBranch'], 'refs/heads/', '') ]
     steps:
       - checkout: self
         fetchDepth: 0
@@ -217,12 +230,6 @@ jobs:
       - script: scanner diff --base-path base --head-path head
         env:
           INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
-          INFRACOST_VCS_PROVIDER: azure_repos
-          INFRACOST_VCS_REPOSITORY_URL: $(Build.Repository.Uri)
-          INFRACOST_VCS_PULL_REQUEST_ID: $(System.PullRequest.PullRequestId)
-          INFRACOST_VCS_BRANCH: $(headBranch)
-          INFRACOST_VCS_BASE_BRANCH: $(System.PullRequest.TargetBranchName)
-          INFRACOST_VCS_PIPELINE_RUN_ID: $(Build.BuildId)
           SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
@@ -230,10 +237,8 @@ jobs:
 `System.AccessToken` to a step otherwise. Give the build service **Contribute to
 pull requests** on the repository. A personal access token works too, via
 `AZURE_DEVOPS_EXT_PAT`; only a 52-character PAT is sent as Basic auth, anything
-else goes out as a bearer token.
-
-`INFRACOST_VCS_REPOSITORY_URL` must be the repository URL containing `/_git/`, not
-the project URL. `Build.Repository.Uri` already is one.
+else goes out as a bearer token. `diff` fails without one of them, and uses it to read
+the pull request title and author — the only fields Azure has no variable for.
 
 ## Commands
 
@@ -254,16 +259,21 @@ set. Paths are flags only.
 
 ## Configuration
 
+On the four platforms above these are overrides — set one only to correct an inferred
+value, or add something the platform does not expose. Everywhere else, set them all.
+
 | Variable | Notes |
 | --- | --- |
 | `INFRACOST_CLI_AUTHENTICATION_TOKEN` | Required by `diff` and `scan`. |
 | `INFRACOST_VCS_PROVIDER` | `github`, `gitlab`, `azure_repos` or `bitbucket`. |
-| `INFRACOST_VCS_REPOSITORY_URL` | Repository **web** URL. Required — never a clone URL with credentials in it. |
+| `INFRACOST_VCS_REPOSITORY_URL` | Repository **web** URL. Never a clone URL with credentials in it. |
 | `INFRACOST_VCS_PULL_REQUEST_ID` | PR number. On GitLab this is the project-scoped `iid`. |
 | `INFRACOST_VCS_PULL_REQUEST_URL` | Alternative to the ID. Set both and they must agree. |
 | `INFRACOST_VCS_BRANCH`, `INFRACOST_VCS_BASE_BRANCH` | Fall back to the checkout's git metadata. |
+| `INFRACOST_VCS_PULL_REQUEST_TITLE`, `INFRACOST_VCS_PULL_REQUEST_AUTHOR`, `INFRACOST_VCS_PULL_REQUEST_LABELS` | Shown on the dashboard run. Labels are comma-separated. |
 | `INFRACOST_VCS_PIPELINE_RUN_ID` | Links the run back to the CI job. |
 | `INFRACOST_CI_DISABLE_DASHBOARD` | Skip uploading results. |
+| `INFRACOST_CI_PLATFORM` | Pin the detected platform: `github_actions`, `gitlab_ci`, `bitbucket`, `azure_devops_TfsGit` or `azure_devops_GitHub`. Any other name turns inference off. |
 | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `BITBUCKET_TOKEN`, `AZURE_DEVOPS_EXT_PAT` or `SYSTEM_ACCESSTOKEN` | Comment token for the provider `diff` is running against. |
 | `INFRACOST_CI_VCS_TLS_CA_CERT_FILE` | PEM bundle trusted in addition to the system pool, for a self-managed VCS behind a private CA. VCS only — the dashboard, pricing and events clients use the system pool. |
 | `INFRACOST_CI_VCS_TLS_INSECURE_SKIP_VERIFY` | Skip VCS certificate verification. The token then travels over an unauthenticated connection — prefer the CA file. Warns when on. |
