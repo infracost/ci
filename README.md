@@ -177,8 +177,10 @@ pipelines:
           script:
             # BITBUCKET_GIT_HTTP_ORIGIN is http, so set the https web URL.
             - export INFRACOST_VCS_REPOSITORY_URL="https://bitbucket.org/$BITBUCKET_REPO_FULL_NAME"
+            # FETCH_HEAD, not origin/<branch>: the clone has no remote-tracking
+            # ref for the destination branch.
             - git fetch origin "$BITBUCKET_PR_DESTINATION_BRANCH"
-            - git worktree add base "origin/$BITBUCKET_PR_DESTINATION_BRANCH"
+            - git worktree add base FETCH_HEAD
             - git worktree add head HEAD
             - scanner diff --base-path base --head-path head
   branches:
@@ -239,6 +241,65 @@ pull requests** on the repository. A personal access token works too, via
 `AZURE_DEVOPS_EXT_PAT`; only a 52-character PAT is sent as Basic auth, anything
 else goes out as a bearer token. `diff` fails without one of them, and uses it to read
 the pull request title and author — the only fields Azure has no variable for.
+
+### Jenkins
+
+Nothing is inferred on Jenkins, so the `INFRACOST_VCS_*` variables carry the metadata.
+A multibranch pipeline sets the `CHANGE_*` variables on a pull request build.
+
+```groovy
+pipeline {
+  agent {
+    docker {
+      image 'ghcr.io/infracost/ci:0.1'
+      // The plugin holds the container open with `cat`, so clear the entrypoint.
+      args  '--entrypoint='
+    }
+  }
+
+  environment {
+    INFRACOST_CLI_AUTHENTICATION_TOKEN = credentials('infracost-api-key')
+    GITHUB_TOKEN                       = credentials('github-token')
+    INFRACOST_VCS_PROVIDER             = 'github'
+    INFRACOST_VCS_REPOSITORY_URL       = 'https://github.com/ORG/REPO'
+    INFRACOST_VCS_PULL_REQUEST_ID      = "${env.CHANGE_ID}"
+    INFRACOST_VCS_PULL_REQUEST_TITLE   = "${env.CHANGE_TITLE}"
+    INFRACOST_VCS_PULL_REQUEST_AUTHOR  = "${env.CHANGE_AUTHOR}"
+    INFRACOST_VCS_BRANCH               = "${env.CHANGE_BRANCH}"
+    INFRACOST_VCS_BASE_BRANCH          = "${env.CHANGE_TARGET}"
+    INFRACOST_VCS_PIPELINE_RUN_ID      = "${env.BUILD_NUMBER}"
+  }
+
+  stages {
+    stage('Infracost') {
+      when { changeRequest() }
+      steps {
+        sh '''
+          # The workspace is reused between builds, so clear old worktrees.
+          git worktree remove --force base || true
+          git worktree remove --force head || true
+          git worktree prune
+
+          git fetch origin "$CHANGE_TARGET"
+          git worktree add base FETCH_HEAD
+          git worktree add head HEAD
+          scanner diff --base-path base --head-path head
+        '''
+      }
+    }
+  }
+}
+```
+
+Jenkins checks out the pull request ref, so there is no `origin/$CHANGE_TARGET` to
+point the base worktree at — hence `FETCH_HEAD`, the ref the fetch just wrote.
+
+Swap `INFRACOST_VCS_PROVIDER` and the token for `gitlab` / `GITLAB_TOKEN`,
+`bitbucket` / `BITBUCKET_TOKEN` or `azure_repos` / `AZURE_DEVOPS_EXT_PAT` to match
+where the repository lives.
+
+Set `INFRACOST_VCS_REPOSITORY_URL` to the repository **web** URL. `GIT_URL` is a
+clone URL and may carry credentials, so it is not a safe substitute.
 
 ## Commands
 
