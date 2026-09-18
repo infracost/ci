@@ -27,6 +27,7 @@ import (
 	"github.com/infracost/proto/gen/go/infracost/rational"
 	"github.com/infracost/vcs/pkg/vcs"
 	"github.com/infracost/vcs/pkg/vcs/azure"
+	"github.com/infracost/vcs/pkg/vcs/bitbucket"
 	"github.com/infracost/vcs/pkg/vcs/comment"
 	"github.com/infracost/vcs/pkg/vcs/github"
 	"github.com/infracost/vcs/pkg/vcs/gitlab"
@@ -153,7 +154,7 @@ func runDiffWithArgs(t *testing.T, cfg *config.Config, m *testingconfig.Mocks, b
 	if extra.prNumber == 0 {
 		extra.prNumber = testPRNumber
 	}
-	vcsCtx, err := resolveDiffContext(cfg, &extra)
+	vcsCtx, err := resolveDiffContext(context.Background(), cfg, &extra)
 	if err != nil {
 		return &ScanResult{}, err
 	}
@@ -572,9 +573,10 @@ func TestNewVCSClient_UnsupportedProvider(t *testing.T) {
 
 func TestNewVCSClient(t *testing.T) {
 	const (
-		githubToken = "ghp-token"
-		gitlabToken = "glpat-token"
-		azureToken  = "azure-token"
+		githubToken    = "ghp-token"
+		gitlabToken    = "glpat-token"
+		azureToken     = "azure-token"
+		bitbucketToken = "bb-token"
 	)
 
 	tests := []struct {
@@ -612,8 +614,26 @@ func TestNewVCSClient(t *testing.T) {
 		{name: "azure with org userinfo", provider: "azure_repos", repoURL: "https://org@dev.azure.com/org/project/_git/repo",
 			args: diffArgs{azureToken: azureToken}, wantType: &azure.Azure{}},
 
-		{name: "bitbucket is refused", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra",
-			wantErr: "posting comments is not supported on bitbucket: set INFRACOST_VCS_PROVIDER to github, gitlab or azure_repos"},
+		{name: "bitbucket cloud", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{}},
+		{name: "bitbucket cloud clone suffix", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra.git",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{}},
+		{name: "bitbucket server", provider: "bitbucket", repoURL: "https://bb.corp/projects/PROJ/repos/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{}},
+		{name: "bitbucket server context path", provider: "bitbucket", repoURL: "https://bb.corp/stash/projects/PROJ/repos/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{}},
+		{name: "bitbucket cloud single segment path", provider: "bitbucket", repoURL: "https://bitbucket.org/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantErr: "the repo URL path must be /<workspace>/<repo>"},
+		{name: "bitbucket server unrecognised path", provider: "bitbucket", repoURL: "https://bb.corp/acme/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantErr: "the repo URL path must be /projects/<key>/repos/<repo>"},
+		{name: "bitbucket overrides", provider: "bitbucket", repoURL: "https://bb.corp/scm/PROJ/infra",
+			args:     diffArgs{bitbucketToken: bitbucketToken, bitbucketRepo: "PROJ/infra", bitbucketSrv: "https://bb.corp"},
+			wantType: &bitbucket.Bitbucket{}},
+		{name: "bitbucket token missing", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra",
+			wantErr: "set --bitbucket-token or BITBUCKET_TOKEN"},
+		// The server the token is sent to is host-checked, not only the repo URL.
+		{name: "bitbucket server url on another vendor's host", provider: "bitbucket", repoURL: "https://bb.corp/projects/PROJ/repos/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken, bitbucketSrv: "https://gitlab.com"}, wantErr: `is a gitlab host, but INFRACOST_VCS_PROVIDER is "bitbucket"`},
 
 		{name: "github token missing", provider: "github", repoURL: testRepoURL,
 			wantErr: "set --github-token or GITHUB_TOKEN"},
@@ -682,6 +702,7 @@ var tlsProviders = []struct {
 	{"github", testRepoURL, diffArgs{githubToken: "ghp-token"}},
 	{"gitlab", "https://gitlab.com/infracost/actions", diffArgs{gitlabToken: "glpat-token"}},
 	{"azure_repos", "https://dev.azure.com/org/project/_git/repo", diffArgs{azureToken: "azure-token"}},
+	{"bitbucket", "https://bb.corp/projects/PROJ/repos/infra", diffArgs{bitbucketToken: "bb-token"}},
 }
 
 // The CA bundle must reach the client, not just parse: a branch that drops
@@ -719,7 +740,7 @@ func TestNewVCSClient_TLSConfigError(t *testing.T) {
 // hasTLSConfig looks for a non-nil *tls.Config anywhere in the client, so the
 // assertion does not depend on each provider's unexported field names.
 func hasTLSConfig(v reflect.Value, depth int) bool {
-	if depth > 12 || !v.IsValid() {
+	if depth > 16 || !v.IsValid() {
 		return false
 	}
 	if v.Type() == reflect.TypeOf((*tls.Config)(nil)) {

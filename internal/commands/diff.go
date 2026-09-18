@@ -18,6 +18,7 @@ import (
 	"github.com/infracost/proto/gen/go/infracost/provider"
 	"github.com/infracost/vcs/pkg/vcs"
 	"github.com/infracost/vcs/pkg/vcs/azure"
+	"github.com/infracost/vcs/pkg/vcs/bitbucket"
 	"github.com/infracost/vcs/pkg/vcs/comment"
 	"github.com/infracost/vcs/pkg/vcs/github"
 	"github.com/infracost/vcs/pkg/vcs/gitlab"
@@ -25,25 +26,28 @@ import (
 )
 
 type diffArgs struct {
-	basePath      string
-	headPath      string
-	prURL         string
-	prNumber      int
-	prTitle       string
-	prAuthor      string
-	prLabels      []string
-	repoURL       string
-	project       string
-	pipelineRunID string
-	githubToken   string
-	githubOwner   string
-	githubRepo    string
-	githubAPIURL  string
-	gitlabToken   string
-	gitlabProject string
-	gitlabServer  string
-	azureToken    string
-	tag           string
+	basePath       string
+	headPath       string
+	prURL          string
+	prNumber       int
+	prTitle        string
+	prAuthor       string
+	prLabels       []string
+	repoURL        string
+	project        string
+	pipelineRunID  string
+	githubToken    string
+	githubOwner    string
+	githubRepo     string
+	githubAPIURL   string
+	gitlabToken    string
+	gitlabProject  string
+	gitlabServer   string
+	azureToken     string
+	bitbucketToken string
+	bitbucketRepo  string
+	bitbucketSrv   string
+	tag            string
 }
 
 // diffContext is the VCS metadata for one diff run, resolved environment then
@@ -91,7 +95,7 @@ func diffCommand(cfg *config.Config, results *ScanResult) (*cobra.Command, *diff
 		Short: "Scan base and head branches, compute cost diff, and post a PR comment",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx := context.Background()
-			vcsCtx, err := resolveDiffContext(cfg, &args)
+			vcsCtx, err := resolveDiffContext(ctx, cfg, &args)
 			if err != nil {
 				return err
 			}
@@ -124,7 +128,12 @@ func diffCommand(cfg *config.Config, results *ScanResult) (*cobra.Command, *diff
 	diffCmd.Flags().StringVar(&args.gitlabToken, "gitlab-token", os.Getenv("GITLAB_TOKEN"), "API token for posting merge request notes")
 	diffCmd.Flags().StringVar(&args.gitlabProject, "gitlab-project", "", "GitLab project full path, e.g. group/subgroup/repo (derived from the repo URL when unset)")
 	diffCmd.Flags().StringVar(&args.gitlabServer, "gitlab-server-url", "", "Self-managed GitLab base URL (derived from the repo URL when unset)")
-	diffCmd.Flags().StringVar(&args.azureToken, "azure-token", firstNonEmpty(os.Getenv("AZURE_DEVOPS_EXT_PAT"), os.Getenv("SYSTEM_ACCESSTOKEN")), "Azure DevOps PAT or bearer token for posting comments")
+	// Trimmed: a file-backed secret carries a newline, and a 53-character PAT
+	// misses the length rule that picks Basic over Bearer.
+	diffCmd.Flags().StringVar(&args.azureToken, "azure-token", strings.TrimSpace(firstNonEmpty(os.Getenv("AZURE_DEVOPS_EXT_PAT"), os.Getenv("SYSTEM_ACCESSTOKEN"))), "Azure DevOps PAT or bearer token for posting comments")
+	diffCmd.Flags().StringVar(&args.bitbucketToken, "bitbucket-token", os.Getenv("BITBUCKET_TOKEN"), "API token for posting pull request comments, or user:password for Basic auth")
+	diffCmd.Flags().StringVar(&args.bitbucketRepo, "bitbucket-repo", "", "Bitbucket workspace/repo, or project/repo on Server (derived from the repo URL when unset)")
+	diffCmd.Flags().StringVar(&args.bitbucketSrv, "bitbucket-server-url", "", "Bitbucket Server base URL (derived from the repo URL when unset)")
 	diffCmd.Flags().StringVar(&args.tag, "tag", "", "Comment tag identifying this run's comments (default \"infracost-comment\")")
 
 	// pr-number, github-owner and github-repo were MarkFlagRequired, which asks
@@ -137,7 +146,7 @@ func diffCommand(cfg *config.Config, results *ScanResult) (*cobra.Command, *diff
 
 // resolveDiffContext collapses environment, flags and git into the single set
 // of values the run is uploaded and judged with.
-func resolveDiffContext(cfg *config.Config, args *diffArgs) (diffContext, error) {
+func resolveDiffContext(ctx context.Context, cfg *config.Config, args *diffArgs) (diffContext, error) {
 	provider, err := resolveVCSProvider(cfg)
 	if err != nil {
 		return diffContext{}, err
@@ -161,7 +170,7 @@ func resolveDiffContext(cfg *config.Config, args *diffArgs) (diffContext, error)
 		return diffContext{}, err
 	}
 
-	return diffContext{
+	vcsCtx := diffContext{
 		provider:   provider,
 		repoURL:    args.repoURL,
 		prURL:      prURL,
@@ -179,7 +188,13 @@ func resolveDiffContext(cfg *config.Config, args *diffArgs) (diffContext, error)
 		commitAuthorEmail: firstNonEmpty(cfg.VCS.CommitAuthorEmail, commit.AuthorEmail),
 		commitTimestamp:   timestamp,
 		pipelineRunID:     args.pipelineRunID,
-	}, nil
+	}
+
+	// After the rest: Azure is the one platform whose title and author need a
+	// call, and it only makes it for the fields still empty.
+	fillAzurePullRequest(ctx, cfg, args.azureToken, &vcsCtx)
+
+	return vcsCtx, nil
 }
 
 // newVCSClient builds the comment client for the resolved provider. Each
@@ -244,6 +259,30 @@ func newVCSClient(ctx context.Context, cfg *config.Config, args *diffArgs, vcsCt
 			Tag:       args.tag,
 		})
 
+	case vcsurl.ProviderBitbucket:
+		serverURL, repo, err := vcsurl.BitbucketProject(vcsCtx.repoURL)
+		if err != nil && (args.bitbucketRepo == "" || args.bitbucketSrv == "") {
+			return nil, err
+		}
+		serverURL = strings.TrimSuffix(firstNonEmpty(args.bitbucketSrv, serverURL), "/")
+		repo = firstNonEmpty(args.bitbucketRepo, repo)
+		// Empty is Bitbucket Cloud, which bitbucket.New takes as the default.
+		// A set one names the host the token goes to, so it is host-checked
+		// like the repository URL was.
+		if serverURL != "" {
+			if err := vcsurl.CheckProviderHost(vcsurl.ProviderBitbucket, serverURL); err != nil {
+				return nil, err
+			}
+		}
+		if err := requireToken(args.bitbucketToken, "--bitbucket-token", "BITBUCKET_TOKEN"); err != nil {
+			return nil, err
+		}
+		return bitbucket.New(ctx, repo, args.bitbucketToken, vcsCtx.prNumber, bitbucket.Options{
+			ServerURL: serverURL,
+			TLSConfig: tlsConfig,
+			Tag:       args.tag,
+		})
+
 	case vcsurl.ProviderAzureRepos:
 		if err := requireToken(args.azureToken, "--azure-token", "AZURE_DEVOPS_EXT_PAT or SYSTEM_ACCESSTOKEN"); err != nil {
 			return nil, err
@@ -256,8 +295,8 @@ func newVCSClient(ctx context.Context, cfg *config.Config, args *diffArgs, vcsCt
 		})
 	}
 
-	return nil, fmt.Errorf("posting comments is not supported on %s: set INFRACOST_VCS_PROVIDER to %s, %s or %s",
-		vcsCtx.provider, vcsurl.ProviderGitHub, vcsurl.ProviderGitLab, vcsurl.ProviderAzureRepos)
+	return nil, fmt.Errorf("posting comments is not supported on %s: set INFRACOST_VCS_PROVIDER to %s",
+		vcsCtx.provider, vcsurl.ProviderList())
 }
 
 // resolveGitHubAPIURL turns the override, or the repository URL when there is

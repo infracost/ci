@@ -257,3 +257,39 @@ func CheckRepoURL(provider, repoURL string) error {
 
 	return nil
 }
+
+// BitbucketProject splits a Bitbucket repository web URL into the server URL
+// and the "<workspace-or-project>/<repo>" path bitbucket.New takes. The server
+// URL is "" on Bitbucket Cloud, which is what its Options expect.
+//
+// The two flavours shape their URLs differently: bitbucket.org/<workspace>/<repo>
+// against <server>/projects/<KEY>/repos/<slug>, where the server may itself sit
+// under a context path.
+func BitbucketProject(repoURL string) (string, string, error) {
+	if err := CheckRepoURL(ProviderBitbucket, repoURL); err != nil {
+		return "", "", err
+	}
+
+	u, _ := url.Parse(repoURL) // CheckRepoURL parsed it already.
+	parts := strings.Split(strings.Trim(TrimRepoURL(u.Path), "/"), "/")
+
+	if vendorHost(repoURL) == "bitbucket.org" {
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", "", fmt.Errorf("cannot derive the Bitbucket repository: the repo URL path must be /<workspace>/<repo>, or set --bitbucket-repo")
+		}
+		return "", strings.Join(parts, "/"), nil
+	}
+
+	for i := 0; i+3 < len(parts); i++ {
+		if parts[i] != "projects" || parts[i+2] != "repos" || parts[i+1] == "" || parts[i+3] == "" {
+			continue
+		}
+		serverURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+		if prefix := strings.Join(parts[:i], "/"); prefix != "" {
+			serverURL += "/" + prefix
+		}
+		return serverURL, parts[i+1] + "/" + parts[i+3], nil
+	}
+
+	return "", "", fmt.Errorf("cannot derive the Bitbucket repository: the repo URL path must be /projects/<key>/repos/<repo>, or set --bitbucket-repo and --bitbucket-server-url")
+}
