@@ -2,11 +2,13 @@ package commands
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/infracost/ci/internal/config"
@@ -26,18 +28,22 @@ func TestAzurePRURL(t *testing.T) {
 		wantErr       string
 	}{
 		{name: "trailing slash", collectionURI: "https://dev.azure.com/acme/", repoURL: azureRepo, repoID: "repo-guid",
-			want: "https://dev.azure.com/acme/_apis/git/repositories/repo-guid/pullRequests/7"},
+			want: "https://dev.azure.com/acme/_apis/git/repositories/repo-guid/pullRequests/7?api-version=6.0"},
 		{name: "no trailing slash", collectionURI: "https://dev.azure.com/acme", repoURL: azureRepo, repoID: "repo-guid",
-			want: "https://dev.azure.com/acme/_apis/git/repositories/repo-guid/pullRequests/7"},
+			want: "https://dev.azure.com/acme/_apis/git/repositories/repo-guid/pullRequests/7?api-version=6.0"},
 		{name: "on-premise server", collectionURI: "https://tfs.corp/tfs/DefaultCollection/",
 			repoURL: "https://tfs.corp/tfs/DefaultCollection/proj/_git/repo", repoID: "repo-guid",
-			want: "https://tfs.corp/tfs/DefaultCollection/_apis/git/repositories/repo-guid/pullRequests/7"},
+			want: "https://tfs.corp/tfs/DefaultCollection/_apis/git/repositories/repo-guid/pullRequests/7?api-version=6.0"},
 		// The org@ userinfo is the web URL Azure hands out.
 		{name: "repository URL userinfo", collectionURI: "https://dev.azure.com/acme/",
 			repoURL: "https://acme@dev.azure.com/acme/proj/_git/repo", repoID: "repo-guid",
-			want: "https://dev.azure.com/acme/_apis/git/repositories/repo-guid/pullRequests/7"},
+			want: "https://dev.azure.com/acme/_apis/git/repositories/repo-guid/pullRequests/7?api-version=6.0"},
 		{name: "repo id is escaped", collectionURI: "https://dev.azure.com/acme/", repoURL: azureRepo, repoID: "a b?c",
-			want: "https://dev.azure.com/acme/_apis/git/repositories/a%20b%3Fc/pullRequests/7"},
+			want: "https://dev.azure.com/acme/_apis/git/repositories/a%20b%3Fc/pullRequests/7?api-version=6.0"},
+		// A query on the collection URI must not swallow the path or api-version.
+		{name: "collection URI query", collectionURI: "https://dev.azure.com/acme/?traceparent=x", repoURL: azureRepo,
+			repoID: "repo-guid",
+			want:   "https://dev.azure.com/acme/_apis/git/repositories/repo-guid/pullRequests/7?api-version=6.0"},
 		{name: "missing repo id", collectionURI: "https://dev.azure.com/acme/", repoURL: azureRepo,
 			wantErr: "not both set"},
 		{name: "missing collection", repoURL: azureRepo, repoID: "repo-guid", wantErr: "not both set"},
@@ -80,6 +86,7 @@ func TestFillAzurePullRequest(t *testing.T) {
 		token          string
 		status         int
 		wantCalled     bool
+		wantAuth       string
 		wantTitle      string
 		wantAuthor     string
 	}{
@@ -89,6 +96,19 @@ func TestFillAzurePullRequest(t *testing.T) {
 			token:      "system-access-token",
 			status:     http.StatusOK,
 			wantCalled: true,
+			// System.AccessToken is an OAuth token, which Azure rejects under Basic.
+			wantAuth:   "Bearer system-access-token",
+			wantTitle:  "Add a bucket",
+			wantAuthor: "owen@infracost.io",
+		},
+		{
+			// A PAT reaches the server as Basic, the other half of setAzureAuth.
+			name:       "personal access token",
+			vcsCtx:     diffContext{provider: "azure_repos", prNumber: 7},
+			token:      strings.Repeat("p", 52),
+			status:     http.StatusOK,
+			wantCalled: true,
+			wantAuth:   "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+strings.Repeat("p", 52))),
 			wantTitle:  "Add a bucket",
 			wantAuthor: "owen@infracost.io",
 		},
@@ -158,10 +178,10 @@ func TestFillAzurePullRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var called bool
-			var gotUser, gotPass string
+			var gotAuth string
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				called = true
-				gotUser, gotPass, _ = r.BasicAuth()
+				gotAuth = r.Header.Get("Authorization")
 				w.WriteHeader(tt.status)
 				_, _ = w.Write([]byte(body))
 			}))
@@ -187,9 +207,8 @@ func TestFillAzurePullRequest(t *testing.T) {
 			assert.Equal(t, tt.wantCalled, called, "API call")
 			assert.Equal(t, tt.wantTitle, vcsCtx.prTitle)
 			assert.Equal(t, tt.wantAuthor, vcsCtx.prAuthor)
-			if tt.wantCalled {
-				assert.Equal(t, "azdo", gotUser)
-				assert.Equal(t, tt.token, gotPass)
+			if tt.wantAuth != "" {
+				assert.Equal(t, tt.wantAuth, gotAuth)
 			}
 		})
 	}
@@ -219,4 +238,28 @@ func writeServerCA(t *testing.T, srv *httptest.Server) string {
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
 	require.NoError(t, os.WriteFile(path, pemBytes, 0o600))
 	return path
+}
+
+// A PAT goes in Basic and an OAuth token in Bearer, the rule pkg/vcs/azure
+// applies to the same credentials.
+func TestSetAzureAuth(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{name: "personal access token", token: strings.Repeat("p", 52),
+			want: "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+strings.Repeat("p", 52)))},
+		{name: "system access token", token: "oauth-token", want: "Bearer oauth-token"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, "https://dev.azure.com/acme/", nil)
+			require.NoError(t, err)
+
+			setAzureAuth(req, tt.token)
+			assert.Equal(t, tt.want, req.Header.Get("Authorization"))
+		})
+	}
 }

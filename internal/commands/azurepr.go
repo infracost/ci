@@ -20,6 +20,16 @@ import (
 // azurePRTimeout bounds the lookup: a cost comment must not wait on metadata.
 const azurePRTimeout = 10 * time.Second
 
+// azureAPIVersion is required on every Azure DevOps REST call. 6.0 is the
+// oldest version the vcs module's comment client sends, so a server that takes
+// its calls takes this one.
+const azureAPIVersion = "6.0"
+
+// azurePATLength is the length of an Azure DevOps Personal Access Token, the
+// same rule pkg/vcs/azure uses: a PAT goes in Basic, anything else — the OAuth
+// System.AccessToken — in Bearer.
+const azurePATLength = 52
+
 // azurePRMaxBody bounds the response: two fields are read from it.
 const azurePRMaxBody = 1 << 20
 
@@ -86,12 +96,18 @@ func azurePRURL(collectionURI, repoURL, repoID string, prNumber int) (string, er
 	if err != nil {
 		return "", fmt.Errorf("SYSTEM_COLLECTIONURI %q is not a URL", collectionURI)
 	}
+	// Dropped before the check below, which rejects a query outright: this is
+	// Azure's own variable, and a stray trace parameter must not cost the
+	// title. The API URL's own query is set at the end.
+	u.RawQuery = ""
+	u.Fragment = ""
+
 	// The access token goes in this request, so the transport is not
 	// negotiable and the host is checked as the repository URL's is.
 	if u.Scheme != "https" {
 		return "", fmt.Errorf("SYSTEM_COLLECTIONURI %q is not https", collectionURI)
 	}
-	if err := vcsurl.CheckProviderHost(vcsurl.ProviderAzureRepos, collectionURI); err != nil {
+	if err := vcsurl.CheckProviderHost(vcsurl.ProviderAzureRepos, u.String()); err != nil {
 		return "", err
 	}
 	// An unrecognised host passes the check above, so the token only goes to
@@ -100,8 +116,23 @@ func azurePRURL(collectionURI, repoURL, repoID string, prNumber int) (string, er
 		return "", fmt.Errorf("SYSTEM_COLLECTIONURI host %q is not the repository URL host", u.Host)
 	}
 
-	return fmt.Sprintf("%s_apis/git/repositories/%s/pullRequests/%d",
-		strings.TrimSuffix(collectionURI, "/")+"/", url.PathEscape(repoID), prNumber), nil
+	// Set on the parsed URL, not by concatenation, so the path is escaped once
+	// and the api-version cannot be swallowed by what the URI already carried.
+	u.Path = strings.TrimSuffix(u.Path, "/") + fmt.Sprintf("/_apis/git/repositories/%s/pullRequests/%d", repoID, prNumber)
+	u.RawPath = ""
+	u.RawQuery = "api-version=" + azureAPIVersion
+	return u.String(), nil
+}
+
+// setAzureAuth sends a PAT as Basic and anything else as Bearer, matching
+// pkg/vcs/azure. The documented System.AccessToken is an OAuth token, and Azure
+// rejects it under Basic.
+func setAzureAuth(req *http.Request, token string) {
+	if len(token) == azurePATLength {
+		req.SetBasicAuth("", token)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 }
 
 // azurePullRequest is the slice of the API response we read.
@@ -122,12 +153,16 @@ func fetchAzurePullRequest(ctx context.Context, apiURL, token string, tlsConfig 
 	if err != nil {
 		return pr, err
 	}
-	// azdo is the conventional placeholder user for a pipeline access token.
-	req.SetBasicAuth("azdo", token)
+	setAzureAuth(req, token)
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
-	client := &http.Client{Transport: transport}
+	// Do not follow redirects: Go forwards the Authorization header to a
+	// same-host target, and a redirect to http would put the token in clear.
+	client := &http.Client{
+		Transport:     transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 
 	// azurePRURL pins the scheme to https and host-checks the collection URI
 	// before this, which is what the taint analysis cannot see.

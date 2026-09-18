@@ -128,7 +128,9 @@ func diffCommand(cfg *config.Config, results *ScanResult) (*cobra.Command, *diff
 	diffCmd.Flags().StringVar(&args.gitlabToken, "gitlab-token", os.Getenv("GITLAB_TOKEN"), "API token for posting merge request notes")
 	diffCmd.Flags().StringVar(&args.gitlabProject, "gitlab-project", "", "GitLab project full path, e.g. group/subgroup/repo (derived from the repo URL when unset)")
 	diffCmd.Flags().StringVar(&args.gitlabServer, "gitlab-server-url", "", "Self-managed GitLab base URL (derived from the repo URL when unset)")
-	diffCmd.Flags().StringVar(&args.azureToken, "azure-token", firstNonEmpty(os.Getenv("AZURE_DEVOPS_EXT_PAT"), os.Getenv("SYSTEM_ACCESSTOKEN")), "Azure DevOps PAT or bearer token for posting comments")
+	// Trimmed: a file-backed secret carries a newline, and a 53-character PAT
+	// misses the length rule that picks Basic over Bearer.
+	diffCmd.Flags().StringVar(&args.azureToken, "azure-token", strings.TrimSpace(firstNonEmpty(os.Getenv("AZURE_DEVOPS_EXT_PAT"), os.Getenv("SYSTEM_ACCESSTOKEN"))), "Azure DevOps PAT or bearer token for posting comments")
 	diffCmd.Flags().StringVar(&args.bitbucketToken, "bitbucket-token", os.Getenv("BITBUCKET_TOKEN"), "API token for posting pull request comments, or user:password for Basic auth")
 	diffCmd.Flags().StringVar(&args.bitbucketRepo, "bitbucket-repo", "", "Bitbucket workspace/repo, or project/repo on Server (derived from the repo URL when unset)")
 	diffCmd.Flags().StringVar(&args.bitbucketSrv, "bitbucket-server-url", "", "Bitbucket Server base URL (derived from the repo URL when unset)")
