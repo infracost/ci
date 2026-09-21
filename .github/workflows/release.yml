@@ -620,6 +620,12 @@ jobs:
             # image, so the caches under HOME are what a bare --user breaks.
             $RUN --user 65532 -e HOME=/tmp -v "${TESTDATA}/basic/head:/src" "$PREF" \
               plugins detect --path /src
+
+            # How an Azure Pipelines container: job holds the container open
+            # before exec'ing its steps. A scanner entrypoint would have exited.
+            CID=$(docker run -d --platform "$PLATFORM" "$PREF" bash -c "sleep infinity")
+            docker exec "$CID" scanner --version | grep -qxF "scanner version $VERSION"
+            docker rm -f "$CID" > /dev/null
             echo "::endgroup::"
           done
 
