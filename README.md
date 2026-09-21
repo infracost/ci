@@ -71,16 +71,16 @@ own variables.
 | Setting | GitHub Actions | GitLab CI | Bitbucket Pipelines | Azure Pipelines |
 | --- | --- | --- | --- | --- |
 | Detected by | `GITHUB_ACTIONS` | `GITLAB_CI` | `BITBUCKET_*` | `SYSTEM_COLLECTIONURI` |
-| Provider | `github` | `gitlab` | `bitbucket` | `azure_repos`, or `github` for a GitHub-backed repo |
+| Provider | `github` | `gitlab` | `bitbucket` | `azure_repos`, or `github` for a repo backed by GitHub or GitHub Enterprise Server |
 | Repository URL | `GITHUB_SERVER_URL` + `GITHUB_REPOSITORY` | `CI_PROJECT_URL` | `BITBUCKET_GIT_HTTP_ORIGIN` † | `BUILD_REPOSITORY_URI` |
-| Pull request id | event payload | `CI_MERGE_REQUEST_IID` | `BITBUCKET_PR_ID` | `SYSTEM_PULLREQUEST_PULLREQUESTID` |
+| Pull request id | event payload | `CI_MERGE_REQUEST_IID` | `BITBUCKET_PR_ID` | `SYSTEM_PULLREQUEST_PULLREQUESTID`, or `SYSTEM_PULLREQUEST_PULLREQUESTNUMBER` on a GitHub-backed repo |
 | Branch | `GITHUB_HEAD_REF` | `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` | `BITBUCKET_BRANCH` | `SYSTEM_PULLREQUEST_SOURCEBRANCH` |
 | Base branch | `GITHUB_BASE_REF` | `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` | `BITBUCKET_PR_DESTINATION_BRANCH` | `SYSTEM_PULLREQUEST_TARGETBRANCH` |
 | Pipeline run id | `GITHUB_RUN_ID` | `CI_PIPELINE_ID` | `BITBUCKET_BUILD_NUMBER` | `BUILD_BUILDID` |
-| Pull request title | event payload | `CI_MERGE_REQUEST_TITLE` | API lookup, needs the comment token | API lookup, needs the comment token |
-| Pull request author | event payload | `CI_COMMIT_AUTHOR` (commit author) | API lookup, needs the comment token | `BUILD_REQUESTEDFOR` |
+| Pull request title | event payload | `CI_MERGE_REQUEST_TITLE` | API lookup, needs the comment token | API lookup on Azure Repos, needs the comment token; nothing on a GitHub-backed repo |
+| Pull request author | event payload | `CI_COMMIT_AUTHOR` (commit author) | API lookup, needs the comment token | `BUILD_REQUESTEDFOR`, replaced by the API lookup on Azure Repos |
 | Pull request labels | event payload | `CI_MERGE_REQUEST_LABELS` | — | — |
-| **Comment token — yours to set** | `GITHUB_TOKEN` | `GITLAB_TOKEN` | `BITBUCKET_TOKEN` | `SYSTEM_ACCESSTOKEN` or `AZURE_DEVOPS_EXT_PAT` |
+| **Comment token — yours to set** | `GITHUB_TOKEN` | `GITLAB_TOKEN` | `BITBUCKET_TOKEN` | `SYSTEM_ACCESSTOKEN` or `AZURE_DEVOPS_EXT_PAT`, or `GITHUB_TOKEN` on a GitHub-backed repo |
 
 *Event payload* is the `pull_request` object in `GITHUB_EVENT_PATH`: Actions has no
 predefined variable for any of those four.
@@ -212,7 +212,37 @@ Bitbucket Data Center: set `INFRACOST_VCS_REPOSITORY_URL` to the
 
 ### Azure Pipelines
 
+Azure Pipelines runs against two different repository hosts, and they differ in how a
+pull request build is triggered and which token comments with. Both use the same job
+container.
+
+Azure starts the job container as `<image> bash -c "sleep infinity"` and execs the
+steps into it, so the image entrypoint runs `bash` and `sh` as given and passes
+everything else to the scanner. No `options: --entrypoint` is needed.
+
+|  | Azure Repos | GitHub-backed |
+| --- | --- | --- |
+| PR build trigger | Build validation branch policy | `pr:` in the YAML |
+| Comment token | `SYSTEM_ACCESSTOKEN` | `GITHUB_TOKEN` |
+| Inferred provider | `azure_repos` | `github` |
+
+`BUILD_REPOSITORY_PROVIDER` is what the scanner reads to tell them apart, so neither
+recipe declares a provider. Only `TfsGit` and `GitHub` are recognised: an Azure
+pipeline backed by GitHub Enterprise, Bitbucket or an external Git remote infers
+nothing, so set `INFRACOST_VCS_PROVIDER` and `INFRACOST_VCS_REPOSITORY_URL` yourself
+there.
+
+#### Azure Repos
+
 ```yaml
+trigger:
+  branches:
+    include:
+      - main
+
+# No pr: trigger — Azure Repos ignores it. PR builds come from a Build validation
+# branch policy on the target branch, which still sets Build.Reason=PullRequest.
+
 jobs:
   - job: infracost
     # diff is a pull request run: a build of the default branch has no target
@@ -226,25 +256,94 @@ jobs:
         # private repository.
         persistCredentials: true
       - script: |
-          git fetch origin "$(System.PullRequest.TargetBranchName)"
-          git worktree add base "origin/$(System.PullRequest.TargetBranchName)"
+          BRANCH="${TARGET_BRANCH#refs/heads/}"
+          git fetch origin "$BRANCH"
+          git worktree add base "origin/$BRANCH"
           git worktree add head HEAD
+        env:
+          # Mapped, not written into the script: Azure substitutes $(...) into
+          # the script text, where bash would parse the branch name as code.
+          TARGET_BRANCH: $(System.PullRequest.TargetBranch)
       - script: scanner diff --base-path base --head-path head
         env:
           INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
           SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
-Azure starts the job container as `<image> bash -c "sleep infinity"` and execs the
-steps into it, so the image entrypoint runs `bash` and `sh` as given and passes
-everything else to the scanner. No `options: --entrypoint` is needed.
+A `pr:` trigger is a GitHub and Bitbucket Cloud feature; on Azure Repos it is ignored
+silently and no PR ever queues a build. Wire the pipeline up as a branch policy
+instead: **Repos → Branches → `main` → Branch policies → Build validation**.
 
 `SYSTEM_ACCESSTOKEN` must be mapped explicitly — Azure Pipelines does not expose
-`System.AccessToken` to a step otherwise. Give the build service **Contribute to
-pull requests** on the repository. A personal access token works too, via
-`AZURE_DEVOPS_EXT_PAT`; only a 52-character PAT is sent as Basic auth, anything
-else goes out as a bearer token. `diff` fails without one of them, and uses it to read
-the pull request title and author — the only fields Azure has no variable for.
+`System.AccessToken` to a step otherwise. The build identity also needs permission to
+comment: **Project Settings → Repositories →** the repo **→ Security**, search
+`Build Service`, set **Contribute to pull requests** to Allow. With *Limit job
+authorization scope to current project* disabled the pipeline runs as **Project
+Collection Build Service** instead, so grant it there.
+
+A personal access token works too, via `AZURE_DEVOPS_EXT_PAT`; only a 52-character PAT
+is sent as Basic auth, anything else goes out as a bearer token. `diff` fails without
+one of them, and uses it to read the pull request title and author — the only fields
+Azure has no variable for.
+
+#### GitHub-backed repository
+
+Azure Pipelines building a GitHub repository. The PR lives on GitHub, so the comment
+goes through the GitHub API and `SYSTEM_ACCESSTOKEN` is not involved.
+
+```yaml
+# An absent trigger: builds every push to every branch, and the condition below
+# then skips the job on each one.
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+
+jobs:
+  - job: infracost
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    container: ghcr.io/infracost/ci:0.1
+    steps:
+      - checkout: self
+        fetchDepth: 0
+        persistCredentials: true
+      - script: |
+          BRANCH="${TARGET_BRANCH#refs/heads/}"
+          git fetch origin "$BRANCH"
+          git worktree add base "origin/$BRANCH"
+          git worktree add head HEAD
+        env:
+          # TargetBranchName is Azure Repos only. Mapped rather than written
+          # into the script, which Azure substitutes into before bash parses it.
+          TARGET_BRANCH: $(System.PullRequest.TargetBranch)
+      - script: scanner diff --base-path base --head-path head
+        env:
+          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
+          GITHUB_TOKEN: $(GITHUB_TOKEN)
+```
+
+`GITHUB_TOKEN` is a pipeline variable you set, marked **Keep this value secret**: a
+fine-grained token scoped to that one repository, with **Pull requests: Read and
+write**. A classic PAT works too, but its `repo` scope carries write access to every
+repository you can reach. Azure leaves `$(GITHUB_TOKEN)` unexpanded if no such
+variable exists, and `diff` refuses that literal rather than sending it to GitHub.
+
+The pull request title is empty on a GitHub-backed repo: the title lookup is Azure
+Repos only, and the author is `BUILD_REQUESTEDFOR` — the display name of whoever
+queued the build, not the GitHub login. Set `INFRACOST_VCS_PULL_REQUEST_TITLE` and
+`INFRACOST_VCS_PULL_REQUEST_AUTHOR` to fill them.
+
+A `pr:` trigger builds pull requests from forks, so leave **Triggers → Pull request
+validation → Make secrets available to builds of forks** off; turning it on hands a
+stranger's branch both tokens. `persistCredentials: true` writes the checkout token
+into `base/.git/config`, inside the tree the scan walks — drop it on a public
+repository, where the fetch needs no credential.
+
+The PR number differs between the two hosts: `SYSTEM_PULLREQUEST_PULLREQUESTID` is
+Azure-internal, so on a GitHub-backed repo the scanner reads
+`SYSTEM_PULLREQUEST_PULLREQUESTNUMBER`, which is the GitHub number.
 
 ### Jenkins
 
