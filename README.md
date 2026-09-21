@@ -235,6 +235,10 @@ jobs:
           SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
+Azure starts the job container as `<image> bash -c "sleep infinity"` and execs the
+steps into it, so the image entrypoint runs `bash` and `sh` as given and passes
+everything else to the scanner. No `options: --entrypoint` is needed.
+
 `SYSTEM_ACCESSTOKEN` must be mapped explicitly — Azure Pipelines does not expose
 `System.AccessToken` to a step otherwise. Give the build service **Contribute to
 pull requests** on the repository. A personal access token works too, via

@@ -54,5 +54,9 @@ COPY dist/${TARGETARCH}/infracost-scanner /usr/local/bin/scanner
 RUN ln -s scanner /usr/local/bin/infracost-scanner
 
 # Only docker run consults this; a GitHub Actions container: job replaces it
-# with its own shell, so the entrypoint takes subcommands.
-ENTRYPOINT ["/usr/local/bin/scanner"]
+# with its own shell, so the entrypoint takes subcommands. The wrapper keeps
+# that contract while letting an Azure Pipelines container: job keep itself alive.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
