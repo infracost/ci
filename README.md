@@ -492,7 +492,11 @@ ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; e
 SHA=$(command -v sha256sum || echo "shasum -a 256")   # macOS has no sha256sum
 
 # Chained: an unverified archive must never reach tar.
-ARCHIVE="infracost-ci_${OS}_${ARCH}.tar.gz"
+if [ -n "${INFRACOST_CI_BASE_URL:-}" ] || [ -z "${INFRACOST_SCANNER_BASE_URL:-}" ]; then
+  ARCHIVE="infracost-ci_${OS}_${ARCH}.tar.gz"
+else
+  ARCHIVE="infracost-scanner_${OS}_${ARCH}.tar.gz"
+fi
 curl -fsSL -O "${BASE}/${REF}/${ARCHIVE}" &&
   curl -fsSL -O "${BASE}/${REF}/checksums.txt" &&
   grep " ${ARCHIVE}$" checksums.txt | $SHA -c - &&
