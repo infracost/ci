@@ -227,9 +227,9 @@ everything else to the scanner. No `options: --entrypoint` is needed.
 | Inferred provider | `azure_repos` | `github` |
 
 `BUILD_REPOSITORY_PROVIDER` is what the scanner reads to tell them apart, so neither
-recipe declares a provider. Only `TfsGit` and `GitHub` are recognised: an Azure
-pipeline backed by GitHub Enterprise, Bitbucket or an external Git remote infers
-nothing, so set `INFRACOST_VCS_PROVIDER` and `INFRACOST_VCS_REPOSITORY_URL` yourself
+recipe declares a provider. `TfsGit`, `GitHub` and `GitHubEnterprise` are recognised:
+an Azure pipeline backed by Bitbucket or an external Git remote infers nothing, so set
+`INFRACOST_VCS_PROVIDER` and `INFRACOST_VCS_REPOSITORY_URL` yourself there.
 there.
 
 #### Azure Repos
