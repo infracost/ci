@@ -20,7 +20,7 @@ import (
 func newTestRoot(t *testing.T, cfg *config.Config) *cobra.Command {
 	t.Helper()
 
-	root := &cobra.Command{Use: "scanner", SilenceUsage: true, SilenceErrors: true}
+	root := &cobra.Command{Use: "infracost-ci", SilenceUsage: true, SilenceErrors: true}
 	diags := process.PreProcess(cfg, root.PersistentFlags())
 	require.Zero(t, diags.Len(), "PreProcess reported %s", diags)
 	// main infers between PreProcess and the flag registration below, so the

@@ -73,7 +73,7 @@ jobs:
           # plugins install calls UpdatePlugins, which resolves latest whatever
           # AUTO_UPDATE says. A cache dir outside /opt leaves the baked set alone.
           docker run --rm -e INFRACOST_CLI_PLUGIN_CACHE_DIRECTORY=/tmp/plugins "$REF" \
-            sh -c 'scanner plugins install > /dev/null && scanner plugins list --format json' |
+            sh -c 'if command -v infracost-ci > /dev/null; then infracost-ci plugins install > /dev/null && infracost-ci plugins list --format json; else scanner plugins install > /dev/null && scanner plugins list --format json; fi' |
             jq -S 'map({key, version}) | sort' > current.json
 
           # diff is symmetric, so a yanked release resolving latest backwards

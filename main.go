@@ -37,7 +37,7 @@ func run() int {
 	}()
 
 	cmd := &cobra.Command{
-		Use:     "scanner",
+		Use:     "infracost-ci",
 		Version: version.Version,
 		Short:   "Cloud cost estimates for IaC in your CI pipeline",
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {

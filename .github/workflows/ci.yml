@@ -53,8 +53,10 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/infracost/plugins
-          key: ${{ runner.os }}-scanner-plugins-${{ hashFiles('go.sum') }}
-          restore-keys: ${{ runner.os }}-scanner-plugins-
+          key: ${{ runner.os }}-infracost-ci-plugins-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-infracost-ci-plugins-
+            ${{ runner.os }}-scanner-plugins-
 
       # Without a token every integration test skips and the job is green
       # having run nothing.
@@ -149,9 +151,9 @@ jobs:
             export CGO_ENABLED=0
           fi
 
-          BINARY="infracost-scanner"
+          BINARY="infracost-ci"
           if [ "$GOOS" = "windows" ]; then
-            BINARY="infracost-scanner.exe"
+            BINARY="infracost-ci.exe"
           fi
           go build \
             -ldflags "-X github.com/infracost/ci/internal/version.Version=${VERSION}" \
@@ -165,7 +167,7 @@ jobs:
         if: matrix.native
         env:
           VERSION: ci-test
-        run: ./bin/infracost-scanner --version | grep -qxF "scanner version $VERSION"
+        run: ./bin/infracost-ci --version | grep -qxF "infracost-ci version $VERSION"
 
       # Mirrors release.yml: the .exe suffix and the zip are otherwise first
       # exercised mid-release, after the draft has been created.
@@ -176,9 +178,9 @@ jobs:
         run: |
           mkdir -p dist
           if [ "$GOOS" = "windows" ]; then
-            (cd bin && zip -q "../dist/infracost-scanner_${GOOS}_${GOARCH}.zip" infracost-scanner.exe)
+            (cd bin && zip -q "../dist/infracost-ci_${GOOS}_${GOARCH}.zip" infracost-ci.exe)
           else
-            tar -czf "dist/infracost-scanner_${GOOS}_${GOARCH}.tar.gz" -C bin infracost-scanner
+            tar -czf "dist/infracost-ci_${GOOS}_${GOARCH}.tar.gz" -C bin infracost-ci
           fi
 
       # Only the Windows archives leave this job. They are the ones nothing
@@ -186,7 +188,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: matrix.goos == 'windows'
         with:
-          name: ci-infracost-scanner_${{ matrix.goos }}_${{ matrix.goarch }}
+          name: ci-infracost-ci_${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/*
           if-no-files-found: error
           retention-days: 1
@@ -205,7 +207,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: ci-infracost-scanner_windows_*
+          pattern: ci-infracost-ci_windows_*
           merge-multiple: true
           path: dist
 
@@ -219,17 +221,17 @@ jobs:
           # Expand-Archive, not unzip: it is what the README recipe tells a
           # user to run, so it is the thing worth proving.
           foreach ($Arch in "amd64", "arm64") {
-            $Archive = "dist/infracost-scanner_windows_$Arch.zip"
+            $Archive = "dist/infracost-ci_windows_$Arch.zip"
             Expand-Archive -Path $Archive -DestinationPath $Arch -Force
-            if (-not (Test-Path "$Arch/infracost-scanner.exe")) {
-              throw "$Archive contains no infracost-scanner.exe"
+            if (-not (Test-Path "$Arch/infracost-ci.exe")) {
+              throw "$Archive contains no infracost-ci.exe"
             }
           }
 
           # windows-latest is x64, so only the amd64 binary can be executed here.
-          $Out = (& ./amd64/infracost-scanner.exe --version | Select-Object -First 1).Trim()
-          if ($Out -ne "scanner version $env:VERSION") {
-            throw "expected 'scanner version $env:VERSION', got '$Out'"
+          $Out = (& ./amd64/infracost-ci.exe --version | Select-Object -First 1).Trim()
+          if ($Out -ne "infracost-ci version $env:VERSION") {
+            throw "expected 'infracost-ci version $env:VERSION', got '$Out'"
           }
 
   # amd64 only and never pushed: release.yml is otherwise the first run of the
@@ -254,7 +256,7 @@ jobs:
           CGO_ENABLED: 0
           GOOS: linux
           GOARCH: amd64
-        run: go build -o dist/amd64/infracost-scanner .
+        run: go build -o dist/amd64/infracost-ci .
 
       - run: docker build . --tag infracost-ci:ci
 

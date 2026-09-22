@@ -16,19 +16,19 @@ RUN apt-get update && \
 ENV INFRACOST_CLI_PLUGIN_CACHE_DIRECTORY=/opt/infracost/plugins
 
 ARG TARGETARCH
-COPY dist/${TARGETARCH}/infracost-scanner /usr/local/bin/scanner
+COPY dist/${TARGETARCH}/infracost-ci /usr/local/bin/infracost-ci
 
 # install.go writes the directory and binaries 0750 as root, which denies
 # every docker run --user. list exits non-zero on a plugin that installs but
 # will not answer GetPluginInfo, so the build fails instead of image-verify.
-RUN scanner plugins install && \
+RUN infracost-ci plugins install && \
     chmod -R a+rX /opt/infracost/plugins && \
-    scanner plugins list
+    infracost-ci plugins list
 
 FROM debian:trixie-slim
 
-# git only: the v2 parsers read HCL rather than driving terraform, and the
-# scanner reads a checkout it never clones. go-getter's hg:: sources are not
+# git only: the v2 parsers read HCL rather than driving terraform. The binary
+# reads a checkout it never clones. go-getter's hg:: sources are not
 # covered.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates git && \
@@ -47,11 +47,11 @@ ENV INFRACOST_CLI_PLUGIN_CACHE_DIRECTORY=/opt/infracost/plugins \
 COPY --from=plugins /opt/infracost/plugins /opt/infracost/plugins
 
 ARG TARGETARCH
-COPY dist/${TARGETARCH}/infracost-scanner /usr/local/bin/scanner
+COPY dist/${TARGETARCH}/infracost-ci /usr/local/bin/infracost-ci
 
-# The 0.1 and latest tags move under pipelines that already call the binary by
-# its released name, so the old name stays as a link.
-RUN ln -s scanner /usr/local/bin/infracost-scanner
+# Moving tags retain the old command names for existing container jobs.
+RUN ln -s infracost-ci /usr/local/bin/scanner && \
+    ln -s scanner /usr/local/bin/infracost-scanner
 
 # Only docker run consults this; a GitHub Actions container: job replaces it
 # with its own shell, so the entrypoint takes subcommands. The wrapper keeps
