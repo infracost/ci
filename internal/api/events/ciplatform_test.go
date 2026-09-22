@@ -13,7 +13,8 @@ import (
 // tests assume no such variable is set.
 var ciEnvVars = []string{
 	"INFRACOST_CI_PLATFORM",
-	"GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI", "JENKINS_HOME", "BUILDKITE",
+	"GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI", "BUILDKITE",
+	"JENKINS_HOME", "JENKINS_URL", "JENKINS_NODE_COOKIE",
 	"TFC_RUN_ID", "ENV0_ENVIRONMENT_ID", "SCALR_RUN_ID", "CF_BUILD_ID",
 	"TRAVIS", "CODEBUILD_CI", "TEAMCITY_VERSION", "BUDDYBUILD_BRANCH",
 	"BITRISE_IO", "SEMAPHORE", "APPVEYOR", "WERCKER_GIT_BRANCH", "MAGNUM",
@@ -55,6 +56,16 @@ func TestCIPlatform(t *testing.T) {
 			name:     "azure devops with repository provider",
 			env:      map[string]string{"SYSTEM_COLLECTIONURI": "https://dev.azure.com/acme/", "BUILD_REPOSITORY_PROVIDER": "GitHub"},
 			expected: "azure_devops_GitHub",
+		},
+		{name: "jenkins url", env: map[string]string{"JENKINS_URL": "https://jenkins.acme.com/"}, expected: "jenkins"},
+		{name: "jenkins node cookie", env: map[string]string{"JENKINS_NODE_COOKIE": "abc123"}, expected: "jenkins"},
+		{name: "jenkins home on the controller", env: map[string]string{"JENKINS_HOME": "/var/jenkins_home"}, expected: "jenkins"},
+		{
+			// Jenkins core sets no CI variable, but a job or image may; the
+			// fallthrough would then return it verbatim.
+			name:     "jenkins outranks the CI fallthrough",
+			env:      map[string]string{"CI": "true", "JENKINS_URL": "https://jenkins.acme.com/"},
+			expected: "jenkins",
 		},
 		{name: "CI passes through a boolean", env: map[string]string{"CI": "true"}, expected: "true"},
 		{name: "CI passes through a platform name", env: map[string]string{"CI": "woodpecker"}, expected: "woodpecker"},
