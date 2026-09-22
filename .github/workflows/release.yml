@@ -133,7 +133,7 @@ jobs:
           gh release create "$TAG" \
             --repo "$REPOSITORY" \
             --target "$TARGET" \
-            --title "Scanner $VERSION" \
+            --title "Infracost CI $VERSION" \
             --generate-notes \
             --draft
 
@@ -202,9 +202,9 @@ jobs:
             export CGO_ENABLED=0
           fi
 
-          BINARY="infracost-scanner"
+          BINARY="infracost-ci"
           if [ "$GOOS" = "windows" ]; then
-            BINARY="infracost-scanner.exe"
+            BINARY="infracost-ci.exe"
           fi
           go build \
             -ldflags "-X github.com/infracost/ci/internal/version.Version=${VERSION}" \
@@ -218,7 +218,7 @@ jobs:
         if: matrix.native
         env:
           VERSION: ${{ needs.version.outputs.version }}
-        run: ./bin/infracost-scanner --version | grep -qxF "scanner version $VERSION"
+        run: ./bin/infracost-ci --version | grep -qxF "infracost-ci version $VERSION"
 
       # No version in the asset name: the latest/download redirect only works
       # while the name is identical across releases.
@@ -229,14 +229,18 @@ jobs:
         run: |
           mkdir -p dist
           if [ "$GOOS" = "windows" ]; then
+            cp bin/infracost-ci.exe bin/infracost-scanner.exe
+            (cd bin && zip -q "../dist/infracost-ci_${GOOS}_${GOARCH}.zip" infracost-ci.exe)
             (cd bin && zip -q "../dist/infracost-scanner_${GOOS}_${GOARCH}.zip" infracost-scanner.exe)
           else
+            cp bin/infracost-ci bin/infracost-scanner
+            tar -czf "dist/infracost-ci_${GOOS}_${GOARCH}.tar.gz" -C bin infracost-ci
             tar -czf "dist/infracost-scanner_${GOOS}_${GOARCH}.tar.gz" -C bin infracost-scanner
           fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: infracost-scanner_${{ matrix.goos }}_${{ matrix.goarch }}
+          name: infracost-ci_${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/*
           if-no-files-found: error
           retention-days: 1
@@ -252,7 +256,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: infracost-scanner_*
+          pattern: infracost-ci_*
           merge-multiple: true
           path: dist
 
@@ -262,7 +266,7 @@ jobs:
         working-directory: dist
         run: |
           ls -1
-          sha256sum infracost-scanner_* > checksums.txt
+          sha256sum infracost-{ci,scanner}_* > checksums.txt
           cat checksums.txt
 
       - name: Upload assets
@@ -358,8 +362,8 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          tar -xzf infracost-scanner_linux_amd64.tar.gz
-          ./infracost-scanner --version | grep -qxF "scanner version $VERSION"
+          tar -xzf infracost-ci_linux_amd64.tar.gz
+          ./infracost-ci --version | grep -qxF "infracost-ci version $VERSION"
 
       # Only assert the redirect when this release actually claimed it.
       - name: Verify the latest redirect resolves to this release
@@ -409,22 +413,22 @@ jobs:
 
           Get-Asset "checksums.txt"
           foreach ($Arch in "amd64", "arm64") {
-            $Archive = "infracost-scanner_windows_$Arch.zip"
+            $Archive = "infracost-ci_windows_$Arch.zip"
             Get-Asset $Archive
             $Expected = (Select-String -Path checksums.txt -Pattern " $Archive$").Line.Split(" ")[0]
             $Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLower()
             if ($Expected -ne $Actual) { throw "checksum mismatch for $Archive" }
 
             Expand-Archive -Path $Archive -DestinationPath $Arch -Force
-            if (-not (Test-Path "$Arch/infracost-scanner.exe")) {
-              throw "$Archive contains no infracost-scanner.exe"
+            if (-not (Test-Path "$Arch/infracost-ci.exe")) {
+              throw "$Archive contains no infracost-ci.exe"
             }
           }
 
           # windows-latest is x64, so only the amd64 binary can be executed here.
-          $Out = (& ./amd64/infracost-scanner.exe --version | Select-Object -First 1).Trim()
-          if ($Out -ne "scanner version $env:VERSION") {
-            throw "expected 'scanner version $env:VERSION', got '$Out'"
+          $Out = (& ./amd64/infracost-ci.exe --version | Select-Object -First 1).Trim()
+          if ($Out -ne "infracost-ci version $env:VERSION") {
+            throw "expected 'infracost-ci version $env:VERSION', got '$Out'"
           }
 
   # verify runs after publish, so a failure must pull the release back out of
@@ -469,7 +473,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: infracost-scanner_linux_*
+          pattern: infracost-ci_linux_*
           path: artifacts
 
       # The Dockerfile COPYs dist/${TARGETARCH}/, which is how one Dockerfile
@@ -479,7 +483,7 @@ jobs:
         run: |
           for ARCH in amd64 arm64; do
             mkdir -p "dist/${ARCH}"
-            tar -xzf "artifacts/infracost-scanner_linux_${ARCH}/infracost-scanner_linux_${ARCH}.tar.gz" \
+            tar -xzf "artifacts/infracost-ci_linux_${ARCH}/infracost-ci_linux_${ARCH}.tar.gz" \
               -C "dist/${ARCH}"
           done
           ls -l dist/*/
@@ -589,7 +593,7 @@ jobs:
             RUN="docker run --rm --platform $PLATFORM"
 
             # A bad -X is silent, so the version is only proven by running it.
-            $RUN "$PREF" --version | grep -qxF "scanner version $VERSION"
+            $RUN "$PREF" --version | grep -qxF "infracost-ci version $VERSION"
 
             # Exits non-zero unless every required plugin is installed and
             # answered GetPluginInfo, so the assertion is the exit code — no
@@ -625,9 +629,9 @@ jobs:
               plugins detect --path /src
 
             # How an Azure Pipelines container: job holds the container open
-            # before exec'ing its steps. A scanner entrypoint would have exited.
+            # before exec'ing its steps. A binary entrypoint would have exited.
             CID=$(docker run -d --platform "$PLATFORM" "$PREF" bash -c "sleep infinity")
-            docker exec "$CID" scanner --version | grep -qxF "scanner version $VERSION"
+            docker exec "$CID" infracost-ci --version | grep -qxF "infracost-ci version $VERSION"
             docker rm -f "$CID" > /dev/null
             echo "::endgroup::"
           done

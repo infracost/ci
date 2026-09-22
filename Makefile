@@ -6,7 +6,7 @@ help: ## Show this help.
 
 .PHONY: build
 build: ## Build the project
-	go build -o bin/scanner main.go
+	go build -o bin/infracost-ci main.go
 
 .PHONY: test
 test: ## Run all tests

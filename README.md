@@ -2,7 +2,7 @@
 
 Cloud cost estimates for infrastructure code, in your CI pipeline.
 
-`infracost-scanner` is a single Go binary — `scanner` inside the container image —
+`infracost-ci` is a single Go binary — `infracost-ci` inside the container image —
 that scans directories of infrastructure
 code, calculates the cost difference between two branches, posts a comment on the
 pull request, and uploads the run to [Infracost Cloud](https://dashboard.infracost.io).
@@ -17,11 +17,11 @@ It embeds the Infracost CLI as a library rather than shelling out to it.
 
 ```mermaid
 flowchart LR
-  base[base checkout] --> scanner
-  head[head checkout] --> scanner["scanner diff"]
-  scanner <--> cloud[("Infracost Cloud<br/>policies · guardrails · budgets")]
-  scanner --> comment["PR comment"]
-  scanner --> gate{"blocking<br/>violation?"}
+  base[base checkout] --> infracostCi
+  head[head checkout] --> infracostCi["infracost-ci diff"]
+  infracostCi <--> cloud[("Infracost Cloud<br/>policies · guardrails · budgets")]
+  infracostCi --> comment["PR comment"]
+  infracostCi --> gate{"blocking<br/>violation?"}
   gate -->|yes| fail["exit 1"]
   gate -->|no| pass["exit 0"]
 ```
@@ -38,13 +38,13 @@ sequenceDiagram
     participant CI
     participant Cloud as Infracost Cloud
     Repo->>CI: push
-    CI->>Cloud: scanner scan --path .
+    CI->>Cloud: infracost-ci scan --path .
     PR->>CI: opened / synchronised
-    CI->>Cloud: scanner diff --base-path … --head-path …
+    CI->>Cloud: infracost-ci diff --base-path … --head-path …
     Cloud-->>CI: policies, guardrails, budgets
     CI->>PR: cost comment (created or updated)
     PR->>CI: merged / closed
-    CI->>Cloud: scanner status --status MERGED
+    CI->>Cloud: infracost-ci status --status MERGED
 ```
 
 ## Provider support
@@ -120,10 +120,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: head
-      - run: scanner diff --base-path base --head-path head
+      - run: infracost-ci diff --base-path base --head-path head
 ```
 
-The image entrypoint is the scanner, but a `container:` job replaces it with its own
+The image entrypoint is `infracost-ci`, but a `container:` job replaces it with its own
 shell — so the step names the binary rather than passing a subcommand to the image.
 
 On GitHub Enterprise Server nothing extra is needed: the API URL is derived from the
@@ -147,7 +147,7 @@ infracost:
     - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - git worktree add base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - git worktree add head HEAD
-    - scanner diff --base-path base --head-path head
+    - infracost-ci diff --base-path base --head-path head
 ```
 
 `INFRACOST_CLI_AUTHENTICATION_TOKEN` and `GITLAB_TOKEN` both go in masked CI/CD
@@ -182,14 +182,14 @@ pipelines:
             - git fetch origin "$BITBUCKET_PR_DESTINATION_BRANCH"
             - git worktree add base FETCH_HEAD
             - git worktree add head HEAD
-            - scanner diff --base-path base --head-path head
+            - infracost-ci diff --base-path base --head-path head
   branches:
     main:
       - step:
           name: Infracost baseline
           script:
             - export INFRACOST_VCS_REPOSITORY_URL="https://bitbucket.org/$BITBUCKET_REPO_FULL_NAME"
-            - scanner scan --path .
+            - infracost-ci scan --path .
 ```
 
 Bitbucket ignores the image's entrypoint and runs the `script:` lines itself, so the
@@ -218,7 +218,7 @@ container.
 
 Azure starts the job container as `<image> bash -c "sleep infinity"` and execs the
 steps into it, so the image entrypoint runs `bash` and `sh` as given and passes
-everything else to the scanner. No `options: --entrypoint` is needed.
+everything else to `infracost-ci`. No `options: --entrypoint` is needed.
 
 |  | Azure Repos | GitHub-backed |
 | --- | --- | --- |
@@ -226,7 +226,7 @@ everything else to the scanner. No `options: --entrypoint` is needed.
 | Comment token | `SYSTEM_ACCESSTOKEN` | `GITHUB_TOKEN` |
 | Inferred provider | `azure_repos` | `github` |
 
-`BUILD_REPOSITORY_PROVIDER` is what the scanner reads to tell them apart, so neither
+`BUILD_REPOSITORY_PROVIDER` is what `infracost-ci` reads to tell them apart, so neither
 recipe declares a provider. `TfsGit`, `GitHub` and `GitHubEnterprise` are recognised:
 an Azure pipeline backed by Bitbucket or an external Git remote infers nothing, so set
 `INFRACOST_VCS_PROVIDER` and `INFRACOST_VCS_REPOSITORY_URL` yourself there.
@@ -264,7 +264,7 @@ jobs:
           # Mapped, not written into the script: Azure substitutes $(...) into
           # the script text, where bash would parse the branch name as code.
           TARGET_BRANCH: $(System.PullRequest.TargetBranch)
-      - script: scanner diff --base-path base --head-path head
+      - script: infracost-ci diff --base-path base --head-path head
         env:
           INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
           SYSTEM_ACCESSTOKEN: $(System.AccessToken)
@@ -318,7 +318,7 @@ jobs:
           # TargetBranchName is Azure Repos only. Mapped rather than written
           # into the script, which Azure substitutes into before bash parses it.
           TARGET_BRANCH: $(System.PullRequest.TargetBranch)
-      - script: scanner diff --base-path base --head-path head
+      - script: infracost-ci diff --base-path base --head-path head
         env:
           INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
           GITHUB_TOKEN: $(GITHUB_TOKEN)
@@ -342,7 +342,7 @@ into `base/.git/config`, inside the tree the scan walks — drop it on a public
 repository, where the fetch needs no credential.
 
 The PR number differs between the two hosts: `SYSTEM_PULLREQUEST_PULLREQUESTID` is
-Azure-internal, so on a GitHub-backed repo the scanner reads
+Azure-internal, so on a GitHub-backed repo `infracost-ci` reads
 `SYSTEM_PULLREQUEST_PULLREQUESTNUMBER`, which is the GitHub number.
 
 ### Jenkins
@@ -386,7 +386,7 @@ pipeline {
           git fetch origin "$CHANGE_TARGET"
           git worktree add base FETCH_HEAD
           git worktree add head HEAD
-          scanner diff --base-path base --head-path head
+          infracost-ci diff --base-path base --head-path head
         '''
       }
     }
@@ -417,7 +417,7 @@ clone URL and may carry credentials, so it is not a safe substitute.
 `infracost-comment`). Changing it on a repository that already has an Infracost
 comment means the next run cannot find the old one and posts a second.
 
-Run `scanner <command> --help` for the full flag list. Most VCS metadata
+Run `infracost-ci <command> --help` for the full flag list. Most VCS metadata
 can come from a flag or an `INFRACOST_VCS_*` variable; the flag wins when both are
 set. Paths are flags only.
 
@@ -470,7 +470,7 @@ label.
 
 The image defaults to root, which matches what a GitHub Actions `container:` job does
 and sidesteps uid mismatches against a mounted workspace. Under a `runAsNonRoot`
-policy, give the user a writable home — the scanner caches there:
+policy, give the user a writable home — `infracost-ci` caches there:
 
 ```bash
 docker run --rm --user 65532 -e HOME=/tmp -e INFRACOST_CLI_AUTHENTICATION_TOKEN \
@@ -485,14 +485,18 @@ in the image.
 Linux and macOS:
 
 ```bash
-BASE="${INFRACOST_SCANNER_BASE_URL:-https://github.com/infracost/ci/releases}"
+BASE="${INFRACOST_CI_BASE_URL:-${INFRACOST_SCANNER_BASE_URL:-https://github.com/infracost/ci/releases}}"
 REF="latest/download"        # or "download/v0.1.0" to pin
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; esac
 SHA=$(command -v sha256sum || echo "shasum -a 256")   # macOS has no sha256sum
 
 # Chained: an unverified archive must never reach tar.
-ARCHIVE="infracost-scanner_${OS}_${ARCH}.tar.gz"
+if [ -n "${INFRACOST_CI_BASE_URL:-}" ] || [ -z "${INFRACOST_SCANNER_BASE_URL:-}" ]; then
+  ARCHIVE="infracost-ci_${OS}_${ARCH}.tar.gz"
+else
+  ARCHIVE="infracost-scanner_${OS}_${ARCH}.tar.gz"
+fi
 curl -fsSL -O "${BASE}/${REF}/${ARCHIVE}" &&
   curl -fsSL -O "${BASE}/${REF}/checksums.txt" &&
   grep " ${ARCHIVE}$" checksums.txt | $SHA -c - &&
@@ -507,13 +511,13 @@ Windows (PowerShell):
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $ProgressPreference = "SilentlyContinue"
 
-$Base = if ($env:INFRACOST_SCANNER_BASE_URL) { $env:INFRACOST_SCANNER_BASE_URL } else { "https://github.com/infracost/ci/releases" }
+$Base = if ($env:INFRACOST_CI_BASE_URL) { $env:INFRACOST_CI_BASE_URL } elseif ($env:INFRACOST_SCANNER_BASE_URL) { $env:INFRACOST_SCANNER_BASE_URL } else { "https://github.com/infracost/ci/releases" }
 $Ref = "latest/download"     # or "download/v0.1.0" to pin
 # An emulated x64 host on ARM64 reports AMD64; ARCHITEW6432 holds the real one.
 $Machine = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 $Arch = if ($Machine -eq "ARM64") { "arm64" } else { "amd64" }
 
-$Archive = "infracost-scanner_windows_$Arch.zip"
+$Archive = "infracost-ci_windows_$Arch.zip"
 Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Ref/$Archive" -OutFile $Archive
 Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Ref/checksums.txt" -OutFile checksums.txt
 
@@ -524,9 +528,10 @@ if ($Expected -ne $Actual) { throw "checksum mismatch for $Archive" }
 Expand-Archive -Path $Archive -DestinationPath . -Force
 ```
 
-Assets are `infracost-scanner_<os>_<arch>.tar.gz` (linux, darwin),
-`infracost-scanner_windows_<arch>.zip` and `checksums.txt`. Set
-`INFRACOST_SCANNER_BASE_URL` to serve the same layout from your own mirror.
+Assets are `infracost-ci_<os>_<arch>.tar.gz` (linux, darwin),
+`infracost-ci_windows_<arch>.zip` and `checksums.txt`. Set
+`INFRACOST_CI_BASE_URL` to serve the same layout from your own mirror;
+`INFRACOST_SCANNER_BASE_URL` remains supported for existing installations.
 `checksums.txt` comes from the same host as the archive, so verification proves the
 download was not corrupted — not that the host is honest. Only point it at a host
 you trust.
@@ -550,7 +555,7 @@ workflow would:
 
 ```bash
 mkdir -p "dist/$(go env GOARCH)"
-CGO_ENABLED=0 go build -o "dist/$(go env GOARCH)/infracost-scanner" .
+CGO_ENABLED=0 go build -o "dist/$(go env GOARCH)/infracost-ci" .
 docker build -t infracost-ci:dev .
 ```
 
