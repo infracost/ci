@@ -1,0 +1,157 @@
+# Plugins resolve "latest" at image build time, and the image sets
+# AUTO_UPDATE=false, so a plugin release reaches container users only when a new
+# image is built. This notices that and cuts a patch release.
+name: Plugin refresh
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: plugin-refresh
+  cancel-in-progress: false
+
+# pipefail: a docker failure mid-pipe would otherwise leave jq an empty input,
+# which it exits 0 on, and the diff below would read as total plugin drift.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  refresh:
+    name: Refresh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: write
+      contents: read
+      packages: read
+    steps:
+      # Only needed while the package inherits the repository's private
+      # visibility. Drop it with FIX-726.
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Find the release to compare against
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          # gh release view resolves /releases/latest, which skips prereleases.
+          # A newer prerelease means main is no longer a patch of this tag.
+          CURRENT=$(gh release view --repo "$REPOSITORY" --json tagName --jq .tagName)
+          NEWEST=$(gh release list --repo "$REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName')
+          if [ "$NEWEST" != "$CURRENT" ]; then
+            echo "$NEWEST is newer than the latest release $CURRENT. Not bumping."
+            exit 1
+          fi
+
+          echo "TAG=${CURRENT}" >> "$GITHUB_OUTPUT"
+
+      - name: Compare shipped plugins against latest
+        id: compare
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          TAG: ${{ steps.release.outputs.TAG }}
+        run: |
+          # The released version tag, not :latest: publish leaves the floating
+          # tags on the previous release when a newer one already claimed them.
+          REF="${IMAGE}:${TAG#v}"
+          docker pull -q "$REF"
+
+          # The label is what image-verify proved the image contains, so it is
+          # the shipped set without re-listing it.
+          docker inspect --format '{{ index .Config.Labels "io.infracost.plugins" }}' "$REF" |
+            jq -S 'map({key, version}) | sort' > shipped.json
+
+          # plugins install calls UpdatePlugins, which resolves latest whatever
+          # AUTO_UPDATE says. A cache dir outside /opt leaves the baked set alone.
+          docker run --rm -e INFRACOST_CLI_PLUGIN_CACHE_DIRECTORY=/tmp/plugins "$REF" \
+            sh -c 'scanner plugins install > /dev/null && scanner plugins list --format json' |
+            jq -S 'map({key, version}) | sort' > current.json
+
+          # diff is symmetric, so a yanked release resolving latest backwards
+          # would otherwise cut a release that downgrades the shipped set.
+          while read -r KEY OLD NEW; do
+            if [ "$(printf '%s\n%s\n' "$OLD" "$NEW" | sort -V | tail -1)" != "$NEW" ]; then
+              echo "$KEY resolves latest to $NEW, older than the shipped $OLD."
+              exit 1
+            fi
+          done < <(jq -n -r --slurpfile old shipped.json --slurpfile new current.json '
+            ($old[0] | INDEX(.key)) as $o
+            | $new[0][]
+            | select($o[.key] and $o[.key].version != .version)
+            | "\(.key) \($o[.key].version) \(.version)"')
+
+          if diff -u shipped.json current.json; then
+            echo "Plugins are unchanged."
+            echo "CHANGED=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "CHANGED=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work out the next patch version
+        id: version
+        if: steps.compare.outputs.CHANGED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.TAG }}
+        run: |
+          V="${TAG#v}"
+          MAJOR="${V%%.*}"; REST="${V#*.}"; MINOR="${REST%%.*}"; PATCH="${REST#*.}"
+          NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          # A dispatch that never published leaves the same drift here tomorrow,
+          # so stop on the version already tried rather than dispatch it daily.
+          if gh release view "v${NEXT}" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "Release v${NEXT} already exists as a draft or a release. Finish it, then re-run."
+            exit 1
+          fi
+
+          PRIOR=$(WANT="Release v${NEXT}" gh run list --repo "$REPOSITORY" --workflow release.yml \
+            --event workflow_dispatch --limit 50 --json displayTitle \
+            --jq '[.[] | select(.displayTitle == env.WANT)] | length')
+          if [ "$PRIOR" != "0" ]; then
+            echo "release.yml was already dispatched for v${NEXT}. Check that run, then re-run."
+            exit 1
+          fi
+
+          echo "$TAG -> v${NEXT}"
+          echo "VERSION=${NEXT}" >> "$GITHUB_OUTPUT"
+
+      # release.yml drafts its own tag, so this needs no write to contents.
+      # image-verify only gates the image tags: a plugin that fails to load
+      # still publishes the archives, and the version check above stops there.
+      - name: Release
+        if: steps.compare.outputs.CHANGED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          WANT: Release v${{ steps.version.outputs.VERSION }}
+        run: |
+          gh workflow run release.yml --repo "$REPOSITORY" --ref main -f version="$VERSION"
+
+          # A dispatch that starts nothing is silent, and the next run would see
+          # the same drift. release.yml names the version in its run title, so
+          # this waits for that run rather than for any dispatch.
+          for _ in $(seq 12); do
+            COUNT=$(gh run list --repo "$REPOSITORY" --workflow release.yml \
+              --event workflow_dispatch --limit 20 --json displayTitle \
+              --jq '[.[] | select(.displayTitle == env.WANT)] | length')
+            if [ "$COUNT" != "0" ]; then
+              echo "Dispatched $WANT."
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Dispatched $VERSION but no run started."
+          exit 1

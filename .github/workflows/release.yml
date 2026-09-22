@@ -1,4 +1,7 @@
 name: Release
+# Names the version in the run title, which is how plugin-refresh identifies the
+# run its own dispatch started.
+run-name: Release ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
 on:
   push:
     tags:

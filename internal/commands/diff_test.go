@@ -168,6 +168,18 @@ func TestResolveGitHubAPIURL(t *testing.T) {
 	}
 }
 
+// An unexpanded Azure macro must read as a missing token, not travel to the
+// provider as a credential.
+func TestRequireToken(t *testing.T) {
+	require.NoError(t, requireToken("ghp_real", "--github-token", "GITHUB_TOKEN"))
+
+	for _, token := range []string{"", "$(GITHUB_TOKEN)"} {
+		err := requireToken(token, "--github-token", "GITHUB_TOKEN")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "set --github-token or GITHUB_TOKEN")
+	}
+}
+
 // The TLS variables are env: tags on config.Config, so PreProcess hydrates
 // them and --help sees them.
 func TestDiffFlags_TLSConfig(t *testing.T) {

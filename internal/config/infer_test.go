@@ -133,6 +133,29 @@ func TestInferVCS(t *testing.T) {
 			},
 		},
 		{
+			name: "azure pipelines building a github enterprise server repo",
+			env: map[string]string{
+				"SYSTEM_COLLECTIONURI":                 "https://dev.azure.com/acme/",
+				"BUILD_REPOSITORY_PROVIDER":            "GitHubEnterprise",
+				"BUILD_REPOSITORY_URI":                 "https://ghe.acme.com/acme/infra",
+				"BUILD_REQUESTEDFOR":                   "Owen Rumney",
+				"BUILD_BUILDID":                        "5150",
+				"SYSTEM_PULLREQUEST_PULLREQUESTNUMBER": "7",
+				"SYSTEM_PULLREQUEST_SOURCEBRANCH":      "refs/heads/feature/bucket",
+				"SYSTEM_PULLREQUEST_TARGETBRANCH":      "refs/heads/main",
+			},
+			wantPlatform: "azure_devops_GitHubEnterprise",
+			wantProvider: "github",
+			want: VCS{
+				RepositoryURL:     "https://ghe.acme.com/acme/infra",
+				PullRequestID:     7,
+				PullRequestAuthor: "Owen Rumney",
+				Branch:            "feature/bucket",
+				BaseBranch:        "main",
+				PipelineRunID:     "5150",
+			},
+		},
+		{
 			name: "azure repos pull request",
 			env: map[string]string{
 				"SYSTEM_COLLECTIONURI":             "https://dev.azure.com/acme/",

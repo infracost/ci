@@ -322,7 +322,9 @@ func resolveGitHubAPIURL(override, repoURL string) (string, error) {
 // requireToken fails in newVCSClient rather than at the first API call, so a
 // missing token reads the same as the other resolution errors.
 func requireToken(token, flag, env string) error {
-	if token == "" {
+	// Azure passes $(GITHUB_TOKEN) through verbatim when no such pipeline
+	// variable exists, and the literal gets a 401 naming nothing the user set.
+	if token == "" || strings.HasPrefix(token, "$(") {
 		return fmt.Errorf("cannot post a pull request comment: set %s or %s", flag, env)
 	}
 	return nil

@@ -151,6 +151,10 @@ func platformValues(platform string) *vcsValues {
 		return azureValues("azure_repos")
 	case "azure_devops_github":
 		return azureValues("github")
+	// GHES is a GitHub repository to everything downstream; only the API URL
+	// differs, and that is derived from the repository URL.
+	case "azure_devops_githubenterprise":
+		return azureValues("github")
 	}
 	return nil
 }
