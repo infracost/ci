@@ -145,6 +145,8 @@ func platformValues(platform string) *vcsValues {
 		return gitlabValues()
 	case "bitbucket":
 		return bitbucketValues()
+	case "jenkins":
+		return jenkinsValues()
 	// getCIPlatform interpolates BUILD_REPOSITORY_PROVIDER raw, so the real
 	// values are azure_devops_TfsGit and azure_devops_GitHub.
 	case "azure_devops_tfsgit":
@@ -189,6 +191,41 @@ func bitbucketValues() *vcsValues {
 		baseBranch:    os.Getenv("BITBUCKET_PR_DESTINATION_BRANCH"),
 		pipelineRunID: os.Getenv("BITBUCKET_BUILD_NUMBER"),
 	}
+}
+
+// jenkinsValues reads the multibranch CHANGE_* set. Provider and repository
+// URL stay the user's: Jenkins names no host, and GIT_URL is a clone URL that
+// may carry credentials.
+func jenkinsValues() *vcsValues {
+	return &vcsValues{
+		// Set only on a change-request build, so a branch build infers the
+		// branch and run id but no pull request.
+		prNumber: envInt("CHANGE_ID"),
+		title:    os.Getenv("CHANGE_TITLE"),
+		// The VCS login. The display name and email are deliberately not
+		// fallbacks: one author must not arrive under two names.
+		author:     os.Getenv("CHANGE_AUTHOR"),
+		branch:     jenkinsBranch(),
+		baseBranch: os.Getenv("CHANGE_TARGET"),
+		// BUILD_NUMBER restarts at 1 in every job, so two jobs on one repository
+		// would share a run id. BUILD_TAG carries the job name with it.
+		pipelineRunID: firstNonEmpty(os.Getenv("BUILD_TAG"), os.Getenv("BUILD_NUMBER")),
+	}
+}
+
+// jenkinsBranch takes BRANCH_NAME only on a plain branch build: multibranch
+// sets it to the synthetic "PR-42" on a change request, and to the tag name on
+// a tag build.
+func jenkinsBranch() string {
+	if branch := os.Getenv("CHANGE_BRANCH"); branch != "" {
+		return branch
+	}
+
+	name := os.Getenv("BRANCH_NAME")
+	if os.Getenv("CHANGE_ID") != "" || (name != "" && name == os.Getenv("TAG_NAME")) {
+		return ""
+	}
+	return name
 }
 
 // azureValues covers both backing repository types. Title and author are not

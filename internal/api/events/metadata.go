@@ -96,10 +96,15 @@ func getCIPlatform() string {
 	}
 
 	for env, platform := range map[string]string{
-		"GITHUB_ACTIONS":      "github_actions",
-		"GITLAB_CI":           "gitlab_ci",
-		"CIRCLECI":            "circleci",
+		"GITHUB_ACTIONS": "github_actions",
+		"GITLAB_CI":      "gitlab_ci",
+		"CIRCLECI":       "circleci",
+		// JENKINS_HOME is controller state and JENKINS_URL needs the root URL
+		// configured, so on a Docker or Kubernetes agent only JENKINS_NODE_COOKIE
+		// is dependable.
 		"JENKINS_HOME":        "jenkins",
+		"JENKINS_URL":         "jenkins",
+		"JENKINS_NODE_COOKIE": "jenkins",
 		"BUILDKITE":           "buildkite",
 		"TFC_RUN_ID":          "tfc",
 		"ENV0_ENVIRONMENT_ID": "env0",

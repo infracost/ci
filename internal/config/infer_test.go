@@ -24,7 +24,10 @@ var ciMarkers = []string{
 	"SYSTEM_PULLREQUEST_TARGETBRANCH", "BUILD_SOURCEBRANCHNAME",
 	"BITBUCKET_BUILD_NUMBER", "BITBUCKET_GIT_HTTP_ORIGIN", "BITBUCKET_PR_ID",
 	"BITBUCKET_BRANCH", "BITBUCKET_PR_DESTINATION_BRANCH",
-	"CI", "CIRCLECI", "JENKINS_HOME", "BUILDKITE", "TRAVIS", "CODEBUILD_CI",
+	"JENKINS_HOME", "JENKINS_URL", "JENKINS_NODE_COOKIE", "CHANGE_ID",
+	"CHANGE_TITLE", "CHANGE_AUTHOR", "CHANGE_BRANCH", "CHANGE_TARGET",
+	"BRANCH_NAME", "TAG_NAME", "BUILD_NUMBER", "BUILD_TAG",
+	"CI", "CIRCLECI", "BUILDKITE", "TRAVIS", "CODEBUILD_CI",
 }
 
 // clearCIEnv unsets every marker for the test's duration. t.Setenv cannot
@@ -230,6 +233,121 @@ func TestInferVCS(t *testing.T) {
 				RepositoryURL: "https://bitbucket.org/acme/infra",
 				Branch:        "main",
 				PipelineRunID: "88",
+			},
+		},
+		{
+			name: "jenkins multibranch change request",
+			env: map[string]string{
+				"JENKINS_URL":   "https://jenkins.acme.com/",
+				"CHANGE_ID":     "42",
+				"CHANGE_TITLE":  "Add a bucket",
+				"CHANGE_AUTHOR": "owenrumney",
+				"CHANGE_BRANCH": "feature/bucket",
+				"CHANGE_TARGET": "main",
+				"BUILD_NUMBER":  "88",
+			},
+			wantPlatform: "jenkins",
+			// Jenkins names no host, so the provider stays the user's.
+			wantProvider: "",
+			want: VCS{
+				PullRequestID:     42,
+				PullRequestTitle:  "Add a bucket",
+				PullRequestAuthor: "owenrumney",
+				Branch:            "feature/bucket",
+				BaseBranch:        "main",
+				PipelineRunID:     "88",
+			},
+		},
+		{
+			name: "jenkins branch build takes BRANCH_NAME",
+			env: map[string]string{
+				"JENKINS_NODE_COOKIE": "abc123",
+				"BRANCH_NAME":         "main",
+				"BUILD_NUMBER":        "88",
+			},
+			wantPlatform: "jenkins",
+			wantProvider: "",
+			want: VCS{
+				Branch:        "main",
+				PipelineRunID: "88",
+			},
+		},
+		{
+			// BRANCH_NAME is "PR-42" on a change request, never the branch.
+			name: "jenkins change request branch outranks BRANCH_NAME",
+			env: map[string]string{
+				"JENKINS_URL":   "https://jenkins.acme.com/",
+				"CHANGE_ID":     "42",
+				"CHANGE_BRANCH": "feature/bucket",
+				"BRANCH_NAME":   "PR-42",
+			},
+			wantPlatform: "jenkins",
+			wantProvider: "",
+			want: VCS{
+				PullRequestID: 42,
+				Branch:        "feature/bucket",
+			},
+		},
+		{
+			// A branch source that exports no CHANGE_BRANCH leaves the branch
+			// empty rather than uploading "PR-42".
+			name: "jenkins change request without CHANGE_BRANCH has no branch",
+			env: map[string]string{
+				"JENKINS_URL":   "https://jenkins.acme.com/",
+				"CHANGE_ID":     "42",
+				"CHANGE_TARGET": "main",
+				"BRANCH_NAME":   "PR-42",
+			},
+			wantPlatform: "jenkins",
+			wantProvider: "",
+			want: VCS{
+				PullRequestID: 42,
+				BaseBranch:    "main",
+			},
+		},
+		{
+			// Tag discovery sets BRANCH_NAME to the tag, which is not a branch.
+			name: "jenkins tag build has no branch",
+			env: map[string]string{
+				"JENKINS_URL":  "https://jenkins.acme.com/",
+				"BRANCH_NAME":  "v1.2.3",
+				"TAG_NAME":     "v1.2.3",
+				"BUILD_NUMBER": "7",
+			},
+			wantPlatform: "jenkins",
+			wantProvider: "",
+			want:         VCS{PipelineRunID: "7"},
+		},
+		{
+			// A Gerrit change id is not an integer, so no pull request is set.
+			name: "jenkins non-numeric change id infers no pull request",
+			env: map[string]string{
+				"JENKINS_URL":   "https://jenkins.acme.com/",
+				"CHANGE_ID":     "Ic0ffee1234",
+				"CHANGE_BRANCH": "feature/bucket",
+				"BUILD_NUMBER":  "88",
+			},
+			wantPlatform: "jenkins",
+			wantProvider: "",
+			want: VCS{
+				Branch:        "feature/bucket",
+				PipelineRunID: "88",
+			},
+		},
+		{
+			// BUILD_TAG names the job, so two jobs cannot share a run id.
+			name: "jenkins prefers BUILD_TAG for the run id",
+			env: map[string]string{
+				"JENKINS_URL":  "https://jenkins.acme.com/",
+				"BRANCH_NAME":  "main",
+				"BUILD_NUMBER": "88",
+				"BUILD_TAG":    "jenkins-infra-plan-main-88",
+			},
+			wantPlatform: "jenkins",
+			wantProvider: "",
+			want: VCS{
+				Branch:        "main",
+				PipelineRunID: "jenkins-infra-plan-main-88",
 			},
 		},
 		{

@@ -68,19 +68,19 @@ own variables.
 
 ### What is inferred
 
-| Setting | GitHub Actions | GitLab CI | Bitbucket Pipelines | Azure Pipelines |
-| --- | --- | --- | --- | --- |
-| Detected by | `GITHUB_ACTIONS` | `GITLAB_CI` | `BITBUCKET_*` | `SYSTEM_COLLECTIONURI` |
-| Provider | `github` | `gitlab` | `bitbucket` | `azure_repos`, or `github` for a repo backed by GitHub or GitHub Enterprise Server |
-| Repository URL | `GITHUB_SERVER_URL` + `GITHUB_REPOSITORY` | `CI_PROJECT_URL` | `BITBUCKET_GIT_HTTP_ORIGIN` † | `BUILD_REPOSITORY_URI` |
-| Pull request id | event payload | `CI_MERGE_REQUEST_IID` | `BITBUCKET_PR_ID` | `SYSTEM_PULLREQUEST_PULLREQUESTID`, or `SYSTEM_PULLREQUEST_PULLREQUESTNUMBER` on a GitHub-backed repo |
-| Branch | `GITHUB_HEAD_REF` | `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` | `BITBUCKET_BRANCH` | `SYSTEM_PULLREQUEST_SOURCEBRANCH` |
-| Base branch | `GITHUB_BASE_REF` | `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` | `BITBUCKET_PR_DESTINATION_BRANCH` | `SYSTEM_PULLREQUEST_TARGETBRANCH` |
-| Pipeline run id | `GITHUB_RUN_ID` | `CI_PIPELINE_ID` | `BITBUCKET_BUILD_NUMBER` | `BUILD_BUILDID` |
-| Pull request title | event payload | `CI_MERGE_REQUEST_TITLE` | API lookup, needs the comment token | API lookup on Azure Repos, needs the comment token; nothing on a GitHub-backed repo |
-| Pull request author | event payload | `CI_COMMIT_AUTHOR` (commit author) | API lookup, needs the comment token | `BUILD_REQUESTEDFOR`, replaced by the API lookup on Azure Repos |
-| Pull request labels | event payload | `CI_MERGE_REQUEST_LABELS` | — | — |
-| **Comment token — yours to set** | `GITHUB_TOKEN` | `GITLAB_TOKEN` | `BITBUCKET_TOKEN` | `SYSTEM_ACCESSTOKEN` or `AZURE_DEVOPS_EXT_PAT`, or `GITHUB_TOKEN` on a GitHub-backed repo |
+| Setting | GitHub Actions | GitLab CI | Bitbucket Pipelines | Azure Pipelines | Jenkins |
+| --- | --- | --- | --- | --- | --- |
+| Detected by | `GITHUB_ACTIONS` | `GITLAB_CI` | `BITBUCKET_*` | `SYSTEM_COLLECTIONURI` | `JENKINS_URL`, `JENKINS_NODE_COOKIE` or `JENKINS_HOME` |
+| Provider | `github` | `gitlab` | `bitbucket` | `azure_repos`, or `github` for a repo backed by GitHub or GitHub Enterprise Server | yours to set ‡ |
+| Repository URL | `GITHUB_SERVER_URL` + `GITHUB_REPOSITORY` | `CI_PROJECT_URL` | `BITBUCKET_GIT_HTTP_ORIGIN` † | `BUILD_REPOSITORY_URI` | yours to set ‡ |
+| Pull request id | event payload | `CI_MERGE_REQUEST_IID` | `BITBUCKET_PR_ID` | `SYSTEM_PULLREQUEST_PULLREQUESTID`, or `SYSTEM_PULLREQUEST_PULLREQUESTNUMBER` on a GitHub-backed repo | `CHANGE_ID` |
+| Branch | `GITHUB_HEAD_REF` | `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` | `BITBUCKET_BRANCH` | `SYSTEM_PULLREQUEST_SOURCEBRANCH` | `CHANGE_BRANCH` |
+| Base branch | `GITHUB_BASE_REF` | `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` | `BITBUCKET_PR_DESTINATION_BRANCH` | `SYSTEM_PULLREQUEST_TARGETBRANCH` | `CHANGE_TARGET` |
+| Pipeline run id | `GITHUB_RUN_ID` | `CI_PIPELINE_ID` | `BITBUCKET_BUILD_NUMBER` | `BUILD_BUILDID` | `BUILD_TAG`, or `BUILD_NUMBER` |
+| Pull request title | event payload | `CI_MERGE_REQUEST_TITLE` | API lookup, needs the comment token | API lookup on Azure Repos, needs the comment token; nothing on a GitHub-backed repo | `CHANGE_TITLE` |
+| Pull request author | event payload | `CI_COMMIT_AUTHOR` (commit author) | API lookup, needs the comment token | `BUILD_REQUESTEDFOR`, replaced by the API lookup on Azure Repos | `CHANGE_AUTHOR` (VCS login) |
+| Pull request labels | event payload | `CI_MERGE_REQUEST_LABELS` | — | — | — |
+| **Comment token — yours to set** | `GITHUB_TOKEN` | `GITLAB_TOKEN` | `BITBUCKET_TOKEN` | `SYSTEM_ACCESSTOKEN` or `AZURE_DEVOPS_EXT_PAT`, or `GITHUB_TOKEN` on a GitHub-backed repo | the one matching the provider you set |
 
 *Event payload* is the `pull_request` object in `GITHUB_EVENT_PATH`: Actions has no
 predefined variable for any of those four.
@@ -88,8 +88,13 @@ predefined variable for any of those four.
 † Bitbucket sets that one to an `http://` URL, which keys a second repository on the
 dashboard. The example below overrides it — the one line you still have to copy.
 
+‡ Jenkins is VCS-agnostic and names no host, so set `INFRACOST_VCS_PROVIDER` and
+`INFRACOST_VCS_REPOSITORY_URL` yourself — see [Jenkins](#jenkins).
+
 On a branch build with no pull request, the branch falls back to `GITHUB_REF_NAME`,
-`CI_COMMIT_BRANCH` and `BUILD_SOURCEBRANCHNAME` respectively.
+`CI_COMMIT_BRANCH` and `BUILD_SOURCEBRANCHNAME` respectively, and to `BRANCH_NAME` on
+Jenkins. Jenkins sets `BRANCH_NAME` to `PR-42` on a change request and to the tag on a
+tag build, so it is used only when neither `CHANGE_ID` nor `TAG_NAME` is set.
 
 Any `INFRACOST_VCS_*` you set yourself wins over the inferred value — see
 [Configuration](#configuration). On any other CI platform nothing is inferred, so set
@@ -347,8 +352,17 @@ Azure-internal, so on a GitHub-backed repo `infracost-ci` reads
 
 ### Jenkins
 
-Nothing is inferred on Jenkins, so the `INFRACOST_VCS_*` variables carry the metadata.
-A multibranch pipeline sets the `CHANGE_*` variables on a pull request build.
+A multibranch pipeline's `CHANGE_*` variables are inferred, so only the provider and
+the repository URL are yours to set. Detection keys on `JENKINS_URL`,
+`JENKINS_NODE_COOKIE` or `JENKINS_HOME`, whichever the build has: `JENKINS_URL` is
+exported only when the Jenkins URL is set under **Manage Jenkins → System**, and
+`JENKINS_HOME` is controller state that a Docker agent or a Kubernetes pod template
+does not see.
+
+If you set `INFRACOST_VCS_*` variables on an earlier version, delete all but the two
+below. An environment value always beats an inferred one, and Groovy renders an unset
+`env.CHANGE_BRANCH` as the literal string `null` — which becomes the branch, or fails
+the run when `INFRACOST_VCS_PULL_REQUEST_ID` gets it.
 
 ```groovy
 pipeline {
@@ -365,12 +379,6 @@ pipeline {
     GITHUB_TOKEN                       = credentials('github-token')
     INFRACOST_VCS_PROVIDER             = 'github'
     INFRACOST_VCS_REPOSITORY_URL       = 'https://github.com/ORG/REPO'
-    INFRACOST_VCS_PULL_REQUEST_ID      = "${env.CHANGE_ID}"
-    INFRACOST_VCS_PULL_REQUEST_TITLE   = "${env.CHANGE_TITLE}"
-    INFRACOST_VCS_PULL_REQUEST_AUTHOR  = "${env.CHANGE_AUTHOR}"
-    INFRACOST_VCS_BRANCH               = "${env.CHANGE_BRANCH}"
-    INFRACOST_VCS_BASE_BRANCH          = "${env.CHANGE_TARGET}"
-    INFRACOST_VCS_PIPELINE_RUN_ID      = "${env.BUILD_NUMBER}"
   }
 
   stages {
