@@ -41,6 +41,7 @@ import (
 const (
 	testRepoURL  = "https://github.com/infracost/actions"
 	testPRNumber = 42
+	testRunID    = "test-run-id"
 )
 
 func testdataDir() string {
@@ -67,13 +68,18 @@ func emptyRunParams() dashboard.RunParameters {
 }
 
 // setupDashboardAddRun configures the dashboard mock to accept AddRun and return a test URL.
+// The posted-comment patch is optional here: only the cases that post assert on it.
 func setupDashboardAddRun(m *testingconfig.Mocks) {
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
 		Return(dashboard.AddRunResult{
-			ID:       "test-run-id",
-			CloudURL: "https://dashboard.infracost.io/org/test-org/repos/test-repo-id/runs/test-run-id",
+			ID:       testRunID,
+			CloudURL: "https://dashboard.infracost.io/org/test-org/repos/test-repo-id/runs/" + testRunID,
 		}, nil)
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(true, nil).
+		Maybe()
 }
 
 // setupEventsMocks configures the events mock to accept Push calls and captures
@@ -110,7 +116,7 @@ func setupVCSMocks(m *testingconfig.Mocks) *comment.Data {
 		Return("comment body", nil)
 	m.VCS.EXPECT().
 		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
-		Return(vcs.PostResult{}, nil)
+		Return(vcs.PostResult{Posted: true}, nil)
 	return &captured
 }
 
@@ -316,6 +322,108 @@ func TestDiff_RetriedPostIsNotRunTime(t *testing.T) {
 	runSeconds, ok := (*runEvent)["runSeconds"].(float64)
 	require.True(t, ok, "expected runSeconds in infracost-run event")
 	assert.LessOrEqual(t, runSeconds, elapsed.Seconds()-1)
+}
+
+// An upload failure costs the comment its dashboard link, not its existence.
+func TestDiff_UploadFailureStillPostsComment(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{}, errors.New("dashboard unavailable"))
+
+	data := setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err, "an upload failure must not stop the comment")
+
+	m.VCS.AssertNumberOfCalls(t, "PostComment", 1)
+	assert.False(t, data.CloudEnabled, "no run to link to")
+	assert.Empty(t, data.RunID)
+	// No run exists, so there is no flag to patch.
+	m.Dashboard.AssertNotCalled(t, "SavePostedPrComment", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The flag starts false in the AddRun payload and becomes true only once the
+// comment is on the pull request.
+func TestDiff_PostedCommentPatchesTheFlag(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.MatchedBy(func(input dashboard.RunInput) bool {
+			return input.ClientPostedComment != nil && !*input.ClientPostedComment
+		})).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil).
+		Once()
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(true, nil).
+		Once()
+
+	setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+}
+
+// A skipped post means an identical or newer comment is already on the pull
+// request, so the flag must still be patched.
+func TestDiff_SkippedCommentPatchesTheFlag(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(true, nil).
+		Once()
+
+	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{SkipReason: "not updating comment since the latest one matches exactly"}, nil)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+}
+
+// A post that never succeeded must not be recorded as one.
+func TestDiff_FailedPostDoesNotPatchTheFlag(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+
+	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{}, errors.New("403 Forbidden"))
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.Error(t, err)
+
+	m.Dashboard.AssertNotCalled(t, "SavePostedPrComment", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestDiff_GuardrailTriggered(t *testing.T) {
@@ -589,68 +697,120 @@ func TestNewVCSClient(t *testing.T) {
 		wantServer string
 		wantErr    string
 	}{
-		{name: "github", provider: "github", repoURL: testRepoURL,
-			args: diffArgs{githubToken: githubToken}, wantType: &github.GitHub{}},
-		{name: "github enterprise", provider: "github", repoURL: "https://ghes.corp/infracost/actions",
-			args: diffArgs{githubToken: githubToken}, wantType: &github.GitHub{}},
-		{name: "github owner and repo override", provider: "github", repoURL: testRepoURL,
-			args: diffArgs{githubToken: githubToken, githubOwner: "acme", githubRepo: "infra"}, wantType: &github.GitHub{}},
-		{name: "gitlab", provider: "gitlab", repoURL: "https://gitlab.com/infracost/actions",
-			args: diffArgs{gitlabToken: gitlabToken}, wantType: &gitlab.GitLab{}},
-		{name: "gitlab self-managed subgroup", provider: "gitlab", repoURL: "https://gitlab.corp/group/sub/repo.git",
-			args: diffArgs{gitlabToken: gitlabToken}, wantType: &gitlab.GitLab{}},
+		{
+			name: "github", provider: "github", repoURL: testRepoURL,
+			args: diffArgs{githubToken: githubToken}, wantType: &github.GitHub{},
+		},
+		{
+			name: "github enterprise", provider: "github", repoURL: "https://ghes.corp/infracost/actions",
+			args: diffArgs{githubToken: githubToken}, wantType: &github.GitHub{},
+		},
+		{
+			name: "github owner and repo override", provider: "github", repoURL: testRepoURL,
+			args: diffArgs{githubToken: githubToken, githubOwner: "acme", githubRepo: "infra"}, wantType: &github.GitHub{},
+		},
+		{
+			name: "gitlab", provider: "gitlab", repoURL: "https://gitlab.com/infracost/actions",
+			args: diffArgs{gitlabToken: gitlabToken}, wantType: &gitlab.GitLab{},
+		},
+		{
+			name: "gitlab self-managed subgroup", provider: "gitlab", repoURL: "https://gitlab.corp/group/sub/repo.git",
+			args: diffArgs{gitlabToken: gitlabToken}, wantType: &gitlab.GitLab{},
+		},
 		// A relative-root install derives both values wrong, so the flags
 		// stand in for a path the URL cannot yield.
 		// gitlab.New builds REST note paths as <serverURL>/api/v4/..., so a
 		// trailing slash on the override would give //api/v4/....
-		{name: "gitlab server url trailing slash", provider: "gitlab", repoURL: "https://gitlab.corp/group/repo",
-			args: diffArgs{gitlabToken: gitlabToken, gitlabServer: "https://gitlab.corp/"}, wantServer: "https://gitlab.corp", wantType: &gitlab.GitLab{}},
-		{name: "gitlab relative root overrides", provider: "gitlab", repoURL: "https://host/gitlab/group/repo",
-			args: diffArgs{gitlabToken: gitlabToken, gitlabProject: "group/repo", gitlabServer: "https://host/gitlab"}, wantType: &gitlab.GitLab{}},
-		{name: "gitlab single segment path", provider: "gitlab", repoURL: "https://gitlab.com/actions",
-			args: diffArgs{gitlabToken: gitlabToken}, wantErr: "the repo URL path must be /<group>/<project>"},
-		{name: "azure", provider: "azure_repos", repoURL: "https://dev.azure.com/org/project/_git/repo",
-			args: diffArgs{azureToken: azureToken}, wantType: &azure.Azure{}},
-		{name: "azure with org userinfo", provider: "azure_repos", repoURL: "https://org@dev.azure.com/org/project/_git/repo",
-			args: diffArgs{azureToken: azureToken}, wantType: &azure.Azure{}},
+		{
+			name: "gitlab server url trailing slash", provider: "gitlab", repoURL: "https://gitlab.corp/group/repo",
+			args: diffArgs{gitlabToken: gitlabToken, gitlabServer: "https://gitlab.corp/"}, wantServer: "https://gitlab.corp", wantType: &gitlab.GitLab{},
+		},
+		{
+			name: "gitlab relative root overrides", provider: "gitlab", repoURL: "https://host/gitlab/group/repo",
+			args: diffArgs{gitlabToken: gitlabToken, gitlabProject: "group/repo", gitlabServer: "https://host/gitlab"}, wantType: &gitlab.GitLab{},
+		},
+		{
+			name: "gitlab single segment path", provider: "gitlab", repoURL: "https://gitlab.com/actions",
+			args: diffArgs{gitlabToken: gitlabToken}, wantErr: "the repo URL path must be /<group>/<project>",
+		},
+		{
+			name: "azure", provider: "azure_repos", repoURL: "https://dev.azure.com/org/project/_git/repo",
+			args: diffArgs{azureToken: azureToken}, wantType: &azure.Azure{},
+		},
+		{
+			name: "azure with org userinfo", provider: "azure_repos", repoURL: "https://org@dev.azure.com/org/project/_git/repo",
+			args: diffArgs{azureToken: azureToken}, wantType: &azure.Azure{},
+		},
 
-		{name: "bitbucket cloud", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra",
-			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{}},
-		{name: "bitbucket cloud clone suffix", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra.git",
-			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{}},
-		{name: "bitbucket server", provider: "bitbucket", repoURL: "https://bb.corp/projects/PROJ/repos/infra",
-			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{}},
-		{name: "bitbucket server context path", provider: "bitbucket", repoURL: "https://bb.corp/stash/projects/PROJ/repos/infra",
-			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{}},
-		{name: "bitbucket cloud single segment path", provider: "bitbucket", repoURL: "https://bitbucket.org/infra",
-			args: diffArgs{bitbucketToken: bitbucketToken}, wantErr: "the repo URL path must be /<workspace>/<repo>"},
-		{name: "bitbucket server unrecognised path", provider: "bitbucket", repoURL: "https://bb.corp/acme/infra",
-			args: diffArgs{bitbucketToken: bitbucketToken}, wantErr: "the repo URL path must be /projects/<key>/repos/<repo>"},
-		{name: "bitbucket overrides", provider: "bitbucket", repoURL: "https://bb.corp/scm/PROJ/infra",
+		{
+			name: "bitbucket cloud", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{},
+		},
+		{
+			name: "bitbucket cloud clone suffix", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra.git",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{},
+		},
+		{
+			name: "bitbucket server", provider: "bitbucket", repoURL: "https://bb.corp/projects/PROJ/repos/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{},
+		},
+		{
+			name: "bitbucket server context path", provider: "bitbucket", repoURL: "https://bb.corp/stash/projects/PROJ/repos/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantType: &bitbucket.Bitbucket{},
+		},
+		{
+			name: "bitbucket cloud single segment path", provider: "bitbucket", repoURL: "https://bitbucket.org/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantErr: "the repo URL path must be /<workspace>/<repo>",
+		},
+		{
+			name: "bitbucket server unrecognised path", provider: "bitbucket", repoURL: "https://bb.corp/acme/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken}, wantErr: "the repo URL path must be /projects/<key>/repos/<repo>",
+		},
+		{
+			name: "bitbucket overrides", provider: "bitbucket", repoURL: "https://bb.corp/scm/PROJ/infra",
 			args:     diffArgs{bitbucketToken: bitbucketToken, bitbucketRepo: "PROJ/infra", bitbucketSrv: "https://bb.corp"},
-			wantType: &bitbucket.Bitbucket{}},
-		{name: "bitbucket token missing", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra",
-			wantErr: "set --bitbucket-token or BITBUCKET_TOKEN"},
+			wantType: &bitbucket.Bitbucket{},
+		},
+		{
+			name: "bitbucket token missing", provider: "bitbucket", repoURL: "https://bitbucket.org/acme/infra",
+			wantErr: "set --bitbucket-token or BITBUCKET_TOKEN",
+		},
 		// The server the token is sent to is host-checked, not only the repo URL.
-		{name: "bitbucket server url on another vendor's host", provider: "bitbucket", repoURL: "https://bb.corp/projects/PROJ/repos/infra",
-			args: diffArgs{bitbucketToken: bitbucketToken, bitbucketSrv: "https://gitlab.com"}, wantErr: `is a gitlab host, but INFRACOST_VCS_PROVIDER is "bitbucket"`},
+		{
+			name: "bitbucket server url on another vendor's host", provider: "bitbucket", repoURL: "https://bb.corp/projects/PROJ/repos/infra",
+			args: diffArgs{bitbucketToken: bitbucketToken, bitbucketSrv: "https://gitlab.com"}, wantErr: `is a gitlab host, but INFRACOST_VCS_PROVIDER is "bitbucket"`,
+		},
 
-		{name: "github token missing", provider: "github", repoURL: testRepoURL,
-			wantErr: "set --github-token or GITHUB_TOKEN"},
-		{name: "gitlab token missing", provider: "gitlab", repoURL: "https://gitlab.com/infracost/actions",
-			wantErr: "set --gitlab-token or GITLAB_TOKEN"},
-		{name: "azure token missing", provider: "azure_repos", repoURL: "https://dev.azure.com/org/project/_git/repo",
-			wantErr: "set --azure-token or AZURE_DEVOPS_EXT_PAT or SYSTEM_ACCESSTOKEN"},
+		{
+			name: "github token missing", provider: "github", repoURL: testRepoURL,
+			wantErr: "set --github-token or GITHUB_TOKEN",
+		},
+		{
+			name: "gitlab token missing", provider: "gitlab", repoURL: "https://gitlab.com/infracost/actions",
+			wantErr: "set --gitlab-token or GITLAB_TOKEN",
+		},
+		{
+			name: "azure token missing", provider: "azure_repos", repoURL: "https://dev.azure.com/org/project/_git/repo",
+			wantErr: "set --azure-token or AZURE_DEVOPS_EXT_PAT or SYSTEM_ACCESSTOKEN",
+		},
 
-		{name: "github owner on gitlab", provider: "gitlab", repoURL: "https://gitlab.com/infracost/actions",
-			args: diffArgs{gitlabToken: gitlabToken, githubOwner: "acme"}, wantErr: "--github-owner, --github-repo and --github-api-url name a GitHub repository"},
-		{name: "github repo on azure", provider: "azure_repos", repoURL: "https://dev.azure.com/org/project/_git/repo",
-			args: diffArgs{azureToken: azureToken, githubRepo: "infra"}, wantErr: "--github-owner, --github-repo and --github-api-url name a GitHub repository"},
-		{name: "github api url on gitlab", provider: "gitlab", repoURL: "https://gitlab.com/infracost/actions",
-			args: diffArgs{gitlabToken: gitlabToken, githubAPIURL: "https://ghes.corp"}, wantErr: "--github-owner, --github-repo and --github-api-url name a GitHub repository"},
+		{
+			name: "github owner on gitlab", provider: "gitlab", repoURL: "https://gitlab.com/infracost/actions",
+			args: diffArgs{gitlabToken: gitlabToken, githubOwner: "acme"}, wantErr: "--github-owner, --github-repo and --github-api-url name a GitHub repository",
+		},
+		{
+			name: "github repo on azure", provider: "azure_repos", repoURL: "https://dev.azure.com/org/project/_git/repo",
+			args: diffArgs{azureToken: azureToken, githubRepo: "infra"}, wantErr: "--github-owner, --github-repo and --github-api-url name a GitHub repository",
+		},
+		{
+			name: "github api url on gitlab", provider: "gitlab", repoURL: "https://gitlab.com/infracost/actions",
+			args: diffArgs{gitlabToken: gitlabToken, githubAPIURL: "https://ghes.corp"}, wantErr: "--github-owner, --github-repo and --github-api-url name a GitHub repository",
+		},
 		// The server the token is sent to is host-checked, not only the repo URL.
-		{name: "gitlab server url on another vendor's host", provider: "gitlab", repoURL: "https://gitlab.corp/group/repo",
-			args: diffArgs{gitlabToken: gitlabToken, gitlabServer: "https://github.com"}, wantErr: `is a github host, but INFRACOST_VCS_PROVIDER is "gitlab"`},
+		{
+			name: "gitlab server url on another vendor's host", provider: "gitlab", repoURL: "https://gitlab.corp/group/repo",
+			args: diffArgs{gitlabToken: gitlabToken, gitlabServer: "https://github.com"}, wantErr: `is a github host, but INFRACOST_VCS_PROVIDER is "gitlab"`,
+		},
 	}
 
 	for _, tt := range tests {
