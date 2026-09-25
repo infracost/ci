@@ -41,6 +41,7 @@ import (
 const (
 	testRepoURL  = "https://github.com/infracost/actions"
 	testPRNumber = 42
+	testRunID    = "test-run-id"
 )
 
 func testdataDir() string {
@@ -67,13 +68,25 @@ func emptyRunParams() dashboard.RunParameters {
 }
 
 // setupDashboardAddRun configures the dashboard mock to accept AddRun and return a test URL.
+// The posted-comment patch is optional here: only the cases that post assert on it.
 func setupDashboardAddRun(m *testingconfig.Mocks) {
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
 		Return(dashboard.AddRunResult{
-			ID:       "test-run-id",
-			CloudURL: "https://dashboard.infracost.io/org/test-org/repos/test-repo-id/runs/test-run-id",
+			ID:       testRunID,
+			CloudURL: "https://dashboard.infracost.io/org/test-org/repos/test-repo-id/runs/" + testRunID,
 		}, nil)
+	allowSavePostedComment(m)
+}
+
+// allowSavePostedComment accepts the posted-comment patch without asserting on
+// it. Every case that posts makes the call; the cases about the flag expect it
+// themselves.
+func allowSavePostedComment(m *testingconfig.Mocks) {
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(true, nil).
+		Maybe()
 }
 
 // setupEventsMocks configures the events mock to accept Push calls and captures
@@ -110,7 +123,7 @@ func setupVCSMocks(m *testingconfig.Mocks) *comment.Data {
 		Return("comment body", nil)
 	m.VCS.EXPECT().
 		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
-		Return(vcs.PostResult{}, nil)
+		Return(vcs.PostResult{Posted: true}, nil)
 	return &captured
 }
 
@@ -316,6 +329,108 @@ func TestDiff_RetriedPostIsNotRunTime(t *testing.T) {
 	runSeconds, ok := (*runEvent)["runSeconds"].(float64)
 	require.True(t, ok, "expected runSeconds in infracost-run event")
 	assert.LessOrEqual(t, runSeconds, elapsed.Seconds()-1)
+}
+
+// An upload failure costs the comment its dashboard link, not its existence.
+func TestDiff_UploadFailureStillPostsComment(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{}, errors.New("dashboard unavailable"))
+
+	data := setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err, "an upload failure must not stop the comment")
+
+	m.VCS.AssertNumberOfCalls(t, "PostComment", 1)
+	assert.False(t, data.CloudEnabled, "no run to link to")
+	assert.Empty(t, data.RunID)
+	// No run exists, so there is no flag to patch.
+	m.Dashboard.AssertNotCalled(t, "SavePostedPrComment", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The flag starts false in the AddRun payload and becomes true only once the
+// comment is on the pull request.
+func TestDiff_PostedCommentPatchesTheFlag(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.MatchedBy(func(input dashboard.RunInput) bool {
+			return input.ClientPostedComment != nil && !*input.ClientPostedComment
+		})).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil).
+		Once()
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(true, nil).
+		Once()
+
+	setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+}
+
+// A skipped post means an identical or newer comment is already on the pull
+// request, so the flag must still be patched.
+func TestDiff_SkippedCommentPatchesTheFlag(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(true, nil).
+		Once()
+
+	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{SkipReason: "not updating comment since the latest one matches exactly"}, nil)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+}
+
+// A post that never succeeded must not be recorded as one.
+func TestDiff_FailedPostDoesNotPatchTheFlag(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+
+	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{}, errors.New("403 Forbidden"))
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.Error(t, err)
+
+	m.Dashboard.AssertNotCalled(t, "SavePostedPrComment", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestDiff_GuardrailTriggered(t *testing.T) {
@@ -530,7 +645,8 @@ func TestDiff_VCSProviderFromConfig(t *testing.T) {
 		Run(func(_ context.Context, input dashboard.RunInput) {
 			metadata = input.Metadata
 		}).
-		Return(dashboard.AddRunResult{ID: "test-run-id"}, nil)
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	allowSavePostedComment(m)
 
 	setupVCSMocks(m)
 	setupEventsMocks(m)
