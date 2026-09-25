@@ -74,6 +74,16 @@ func setupDashboardAddRun(m *testingconfig.Mocks) {
 			ID:       "test-run-id",
 			CloudURL: "https://dashboard.infracost.io/org/test-org/repos/test-repo-id/runs/test-run-id",
 		}, nil)
+	setupDashboardSavePostedComment(m)
+}
+
+// setupDashboardSavePostedComment allows, but does not require, the posted
+// comment to be recorded, so tests that do not exercise the post can skip it.
+func setupDashboardSavePostedComment(m *testingconfig.Mocks) {
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, "test-run-id", "comment body").
+		Return(true, nil).
+		Maybe()
 }
 
 // setupEventsMocks configures the events mock to accept Push calls and captures
@@ -110,7 +120,7 @@ func setupVCSMocks(m *testingconfig.Mocks) *comment.Data {
 		Return("comment body", nil)
 	m.VCS.EXPECT().
 		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
-		Return(vcs.PostResult{}, nil)
+		Return(vcs.PostResult{Posted: true}, nil)
 	return &captured
 }
 
@@ -316,6 +326,94 @@ func TestDiff_RetriedPostIsNotRunTime(t *testing.T) {
 	runSeconds, ok := (*runEvent)["runSeconds"].(float64)
 	require.True(t, ok, "expected runSeconds in infracost-run event")
 	assert.LessOrEqual(t, runSeconds, elapsed.Seconds()-1)
+}
+
+// Only a post made this run proves which body the PR carries, so the record
+// follows Posted and nothing else. Mocks are strict: an unexpected
+// SavePostedPrComment already fails the cases that must not record.
+func TestDiff_PostedCommentIsRecorded(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: "test-run-id"}, nil)
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, "test-run-id", "comment body").
+		Return(true, nil).
+		Once()
+
+	setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+}
+
+func TestDiff_SkippedCommentIsNotRecorded(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: "test-run-id"}, nil)
+
+	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{SkipReason: "not updating comment since the latest one matches exactly"}, nil)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+}
+
+func TestDiff_GivenUpPostIsNotRecorded(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: "test-run-id"}, nil)
+
+	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{}, retryAfterError("1")).Once()
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{}, errors.New("500 Internal Server Error")).Once()
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.ErrorContains(t, err, "failed to post comment")
+}
+
+func TestDiff_DashboardDisabledDoesNotRecordComment(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	cfg.DisableDashboard = true
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+
+	setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
 }
 
 func TestDiff_GuardrailTriggered(t *testing.T) {
@@ -532,6 +630,7 @@ func TestDiff_VCSProviderFromConfig(t *testing.T) {
 		}).
 		Return(dashboard.AddRunResult{ID: "test-run-id"}, nil)
 
+	setupDashboardSavePostedComment(m)
 	setupVCSMocks(m)
 	setupEventsMocks(m)
 

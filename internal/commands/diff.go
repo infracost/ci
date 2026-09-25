@@ -444,6 +444,7 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	// Upload run results to the dashboard and set the cloud URL in the comment.
 	// TODO: on failure, post the comment without the cloud URL and include a
 	// message explaining that this run could not be uploaded to the dashboard.
+	var runID string
 	if uploadEnabled {
 		runOpts.BaseResult = baseResult
 		runOpts.HeadResult = headResult
@@ -466,6 +467,7 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 		// mark cloud as enabled rather than a pre-built URL.
 		data.CloudEnabled = true
 		data.RunID = addRunResult.ID
+		runID = addRunResult.ID
 	}
 
 	body, err := vcsClient.GenerateComment(data)
@@ -479,6 +481,17 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	}
 	if postResult.SkipReason != "" {
 		logging.Warnf("comment not posted: %s", postResult.SkipReason)
+	}
+
+	// Only a post we made this run proves which body is on the PR; skips and
+	// give-ups leave postedComment null rather than assert a body we can't see.
+	if uploadEnabled && postResult.Posted {
+		saved, err := dashboardClient.SavePostedPrComment(ctx, runID, body)
+		if err != nil {
+			logging.Warnf("failed to record posted comment: %s", err)
+		} else if !saved {
+			logging.Warnf("dashboard did not record the posted comment for run %s", runID)
+		}
 	}
 
 	eventsClient := cfg.Events.Client(httpClient)
