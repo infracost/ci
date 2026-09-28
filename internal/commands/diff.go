@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/infracost/ci/internal/api"
+	"github.com/infracost/ci/internal/api/dashboard"
 	"github.com/infracost/ci/internal/config"
 	"github.com/infracost/ci/internal/git"
 	"github.com/infracost/ci/internal/vcsurl"
@@ -441,15 +442,18 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 		RepoName:                 runParams.RepositoryName,
 	})
 
-	// Upload run results to the dashboard and set the cloud URL in the comment.
-	// TODO: on failure, post the comment without the cloud URL and include a
-	// message explaining that this run could not be uploaded to the dashboard.
+	// Upload first, so the comment can carry the run link and the dashboard has
+	// the run to judge. A failure is not fatal: the comment is worth more than
+	// the link. See the call-order decision on FIX-719.
+	var runID string
 	if uploadEnabled {
 		runOpts.BaseResult = baseResult
 		runOpts.HeadResult = headResult
 		runOpts.GuardrailResults = guardrailResults
 		runOpts.BudgetResults = budgetResults
-		runOpts.CommentPosted = true
+		// Nothing is posted yet. The dashboard stores no comment body until
+		// savePostedComment saves it below.
+		runOpts.CommentPosted = false
 		runOpts.Currency = headResult.Currency
 		runOpts.Command = "comment"
 		runOpts.UsageAPIEnabled = usageAPIEnabled
@@ -459,13 +463,16 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 		runInput := config.BuildRunInput(runOpts)
 		addRunResult, err := dashboardClient.AddRun(ctx, runInput)
 		if err != nil {
-			return fmt.Errorf("failed to upload run to dashboard: %w", err)
+			// TODO: say so in the comment itself; comment.Data has no field for it.
+			logging.Warnf("failed to upload run to dashboard, posting the comment without the dashboard link: %s", err)
+		} else {
+			// The VCS library builds the dashboard run link itself from OrgSlug,
+			// RepoID and RunID (see comment.Data.runURL), so pass the run ID and
+			// mark cloud as enabled rather than a pre-built URL.
+			runID = addRunResult.ID
+			data.CloudEnabled = true
+			data.RunID = runID
 		}
-		// The VCS library builds the dashboard run link itself from OrgSlug,
-		// RepoID and RunID (see comment.Data.runURL), so pass the run ID and
-		// mark cloud as enabled rather than a pre-built URL.
-		data.CloudEnabled = true
-		data.RunID = addRunResult.ID
 	}
 
 	body, err := vcsClient.GenerateComment(data)
@@ -480,6 +487,7 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	if postResult.SkipReason != "" {
 		logging.Warnf("comment not posted: %s", postResult.SkipReason)
 	}
+	savePostedComment(ctx, dashboardClient, runID, body, postResult)
 
 	eventsClient := cfg.Events.Client(httpClient)
 	// Retry sleep is not compute time, and would skew the metric on rate-limited runs.
@@ -488,6 +496,29 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 
 	checkBlockingViolations(data, runParams.Guardrails, results)
 	return nil
+}
+
+// savePostedComment records the comment body that is on the pull request.
+// The body is what the dashboard reads for posted / not posted, and it is only
+// known after the post, so this is the only place it can be a fact.
+func savePostedComment(ctx context.Context, client dashboard.Client, runID, body string, result vcs.PostResult) {
+	// A skip means an existing comment was left in place. Only record it when
+	// that comment is ours; a newer one belongs to another run, and claiming it
+	// would credit this run with text it did not post.
+	if runID == "" || (!result.Posted && result.Body != body) {
+		return
+	}
+
+	// Cost prevention is gated on the body, but a comment the user can already
+	// see is not worth failing the run over.
+	saved, err := client.SavePostedPrComment(ctx, runID, body)
+	if err != nil {
+		logging.Warnf("failed to record the posted comment on the dashboard run: %s", err)
+		return
+	}
+	if !saved {
+		logging.Warnf("the dashboard did not record the posted comment on run %s, so cost prevention will not see it", runID)
+	}
 }
 
 // checkBlockingViolations inspects the comment data for new guardrail or
