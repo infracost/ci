@@ -425,6 +425,15 @@ clone URL and may carry credentials, so it is not a safe substitute.
 `infracost-comment`). Changing it on a repository that already has an Infracost
 comment means the next run cannot find the old one and posts a second.
 
+`--comment-out-file <path>` writes the comment to a file instead of posting it,
+or to stdout with `-`. No token is needed to post the comment, and the dashboard
+run shows no comment, since none was posted. Use it when the job that scans
+cannot hold a PR-write token and a later job posts the comment. The pull request
+identity is still required: the run is still uploaded as a pull request run, and
+a token already in the environment is still used to read pull request metadata.
+The file carries the `--tag` marker, so the comment a later job posts is the one
+the next run finds and updates.
+
 Run `infracost-ci <command> --help` for the full flag list. Most VCS metadata
 can come from a flag or an `INFRACOST_VCS_*` variable; the flag wins when both are
 set. Paths are flags only.

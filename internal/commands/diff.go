@@ -49,6 +49,7 @@ type diffArgs struct {
 	bitbucketRepo  string
 	bitbucketSrv   string
 	tag            string
+	commentOutFile string
 }
 
 // diffContext is the VCS metadata for one diff run, resolved environment then
@@ -136,6 +137,7 @@ func diffCommand(cfg *config.Config, results *ScanResult) (*cobra.Command, *diff
 	diffCmd.Flags().StringVar(&args.bitbucketRepo, "bitbucket-repo", "", "Bitbucket workspace/repo, or project/repo on Server (derived from the repo URL when unset)")
 	diffCmd.Flags().StringVar(&args.bitbucketSrv, "bitbucket-server-url", "", "Bitbucket Server base URL (derived from the repo URL when unset)")
 	diffCmd.Flags().StringVar(&args.tag, "tag", "", "Comment tag identifying this run's comments (default \"infracost-comment\")")
+	diffCmd.Flags().StringVar(&args.commentOutFile, "comment-out-file", "", "Write the comment to this path instead of posting it, or \"-\" for stdout. No provider token is needed")
 
 	// pr-number, github-owner and github-repo were MarkFlagRequired, which asks
 	// only about the command line; resolveDiffContext names the variable.
@@ -203,6 +205,12 @@ func resolveDiffContext(ctx context.Context, cfg *config.Config, args *diffArgs)
 // branch derives its own identity from the repository URL resolveDiffContext
 // already validated; only the switch knows the vcs module's package names.
 func newVCSClient(ctx context.Context, cfg *config.Config, args *diffArgs, vcsCtx diffContext) (vcs.VCS, error) {
+	// Before the host check and the token checks: writing to a file contacts
+	// no provider, so neither applies.
+	if args.commentOutFile != "" {
+		return newFileVCS(args.commentOutFile, args.tag, vcsCtx.provider), nil
+	}
+
 	// First, so a provider aimed at another vendor's host cannot send its
 	// token there before any client exists.
 	if err := vcsurl.CheckProviderHost(vcsCtx.provider, vcsCtx.repoURL); err != nil {
@@ -502,16 +510,26 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 // The body is what the dashboard reads for posted / not posted, and it is only
 // known after the post, so this is the only place it can be a fact.
 func savePostedComment(ctx context.Context, client dashboard.Client, runID, body string, result vcs.PostResult) {
+	if runID == "" {
+		logging.Debugf("not recording the posted comment: the run was not uploaded")
+		return
+	}
+	if !result.Posted && result.Body == "" {
+		logging.Debugf("not recording the posted comment on run %s: no comment was left on the pull request", runID)
+		return
+	}
 	// A skip means an existing comment was left in place. Only record it when
 	// that comment is ours; a newer one belongs to another run, and claiming it
-	// would credit this run with text it did not post.
-	if runID == "" || (!result.Posted && result.Body != body) {
+	// would credit this run with text it did not post. The tag comes off first:
+	// every provider adds its own before posting, so the bodies never match.
+	if !result.Posted && untag(result.Body) != body {
+		logging.Debugf("not recording the posted comment on run %s: the comment on the pull request is not the one this run generated", runID)
 		return
 	}
 
 	// Cost prevention is gated on the body, but a comment the user can already
 	// see is not worth failing the run over.
-	saved, err := client.SavePostedPrComment(ctx, runID, body)
+	saved, err := savePostedCommentRetrying(ctx, client, runID, body)
 	if err != nil {
 		logging.Warnf("failed to record the posted comment on the dashboard run: %s", err)
 		return
@@ -519,6 +537,38 @@ func savePostedComment(ctx context.Context, client dashboard.Client, runID, body
 	if !saved {
 		logging.Warnf("the dashboard did not record the posted comment on run %s, so cost prevention will not see it", runID)
 	}
+}
+
+// untag strips the marker a provider adds to a body before posting it: a hidden
+// markdown comment on the first line, or the visible footer Bitbucket needs.
+func untag(body string) string {
+	if strings.HasPrefix(body, "[//]: <> (") {
+		if _, rest, found := strings.Cut(body, "\n"); found {
+			body = rest
+		}
+	}
+
+	lines := strings.Split(body, "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if strings.HasPrefix(last, "*(") && strings.HasSuffix(last, ")*") {
+		body = strings.TrimRight(strings.Join(lines[:len(lines)-1], "\n"), "\n")
+	}
+	return body
+}
+
+// savePostedCommentRetrying retries a 5xx or a dropped connection once. The
+// dashboard's write is idempotent, and this is the only record of the comment.
+func savePostedCommentRetrying(ctx context.Context, client dashboard.Client, runID, body string) (bool, error) {
+	saved, err := client.SavePostedPrComment(ctx, runID, body)
+	if err == nil || !dashboard.Retryable(err) {
+		return saved, err
+	}
+
+	logging.Warnf("failed to record the posted comment, retrying in %s: %s", savePostedCommentRetryDelay, err)
+	if err := sleep(ctx, savePostedCommentRetryDelay); err != nil {
+		return false, err
+	}
+	return client.SavePostedPrComment(ctx, runID, body)
 }
 
 // checkBlockingViolations inspects the comment data for new guardrail or

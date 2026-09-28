@@ -3,8 +3,10 @@ package commands
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/vcs/pkg/vcs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,6 +82,32 @@ func TestResolveDiffContext_RequiresBuildablePullRequestURL(t *testing.T) {
 
 			require.Error(t, err)
 			assert.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+// savePostedComment compares the body it generated against the one on the pull
+// request, which carries the tag the provider added at post time.
+func TestUntag(t *testing.T) {
+	validAt := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "untagged", body: "comment body", want: "comment body"},
+		{name: "markdown tag", body: vcs.AddMarkdownTags("comment body", "infracost-comment", &validAt), want: "comment body"},
+		{name: "footer tag", body: vcs.AddFooterTags("comment body", "infracost-comment", &validAt), want: "comment body"},
+		{name: "custom tag", body: vcs.AddMarkdownTags("comment body", "costs", nil), want: "comment body"},
+		{name: "multi-line body", body: vcs.AddMarkdownTags("line one\nline two", "infracost-comment", &validAt), want: "line one\nline two"},
+		// Another run's comment that quotes ours is not ours.
+		{name: "someone else's body", body: "a newer comment body", want: "a newer comment body"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, untag(tt.body))
 		})
 	}
 }

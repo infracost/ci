@@ -14,11 +14,12 @@ import (
 
 func TestSavePostedPrComment(t *testing.T) {
 	tests := []struct {
-		name       string
-		status     int
-		response   string
-		wantSaved  bool
-		wantErrMsg string
+		name          string
+		status        int
+		response      string
+		wantSaved     bool
+		wantErrMsg    string
+		wantRetryable bool
 	}{
 		{
 			name:      "saved",
@@ -50,10 +51,19 @@ func TestSavePostedPrComment(t *testing.T) {
 			wantErrMsg: "savePostedPrComment missing from response",
 		},
 		{
-			name:       "gateway error",
-			status:     http.StatusBadGateway,
-			response:   `{"message":"Internal server error"}`,
-			wantErrMsg: "savePostedPrComment missing from response",
+			name:          "gateway error",
+			status:        http.StatusBadGateway,
+			response:      `{"message":"Internal server error"}`,
+			wantErrMsg:    "dashboard returned 502 Bad Gateway",
+			wantRetryable: true,
+		},
+		{
+			// A proxy in front of the dashboard, so http.StatusText knows nothing.
+			name:          "unknown 5xx",
+			status:        520,
+			response:      `{"message":"unknown error"}`,
+			wantErrMsg:    "dashboard returned 520",
+			wantRetryable: true,
 		},
 		{
 			name:       "forbidden",
@@ -99,6 +109,7 @@ func TestSavePostedPrComment(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+			assert.Equal(t, tt.wantRetryable, Retryable(err))
 			assert.Equal(t, tt.wantSaved, saved)
 		})
 	}
@@ -154,6 +165,32 @@ func TestSavePostedPrCommentTransportError(t *testing.T) {
 	saved, err := c.SavePostedPrComment(context.Background(), "test-run-id", "comment body")
 	require.Error(t, err)
 	assert.False(t, saved)
+	// A dropped connection is what a restart or a failover in flight looks like.
+	assert.True(t, Retryable(err))
+}
+
+// The response body is cut off mid-JSON, which the decoder reports as an EOF
+// rather than a net.Error.
+func TestSavePostedPrCommentTruncatedBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"savePostedPrComment"`))
+
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if !assert.NoError(t, err) {
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	c := newTestClient(server.URL)
+
+	saved, err := c.SavePostedPrComment(context.Background(), "test-run-id", "comment body")
+	require.Error(t, err)
+	assert.False(t, saved)
+	assert.True(t, Retryable(err))
 }
 
 func newTestClient(endpoint string) Client {
