@@ -352,13 +352,13 @@ func TestDiff_UploadFailureStillPostsComment(t *testing.T) {
 	m.VCS.AssertNumberOfCalls(t, "PostComment", 1)
 	assert.False(t, data.CloudEnabled, "no run to link to")
 	assert.Empty(t, data.RunID)
-	// No run exists, so there is no flag to patch.
+	// No run exists, so there is nothing to save against.
 	m.Dashboard.AssertNotCalled(t, "SavePostedPrComment", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// The flag starts false in the AddRun payload and becomes true only once the
-// comment is on the pull request.
-func TestDiff_PostedCommentPatchesTheFlag(t *testing.T) {
+// The AddRun payload carries no comment, and the body is saved only once it is
+// on the pull request.
+func TestDiff_PostedCommentIsSaved(t *testing.T) {
 	cfg, m := testingconfig.Config(t)
 	processPlugins(cfg)
 
@@ -383,9 +383,9 @@ func TestDiff_PostedCommentPatchesTheFlag(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// A skipped post means an identical or newer comment is already on the pull
-// request, so the flag must still be patched.
-func TestDiff_SkippedCommentPatchesTheFlag(t *testing.T) {
+// A skip because the comment on the pull request is already identical still
+// leaves our body on the pull request, so it is saved.
+func TestDiff_IdenticalCommentIsSaved(t *testing.T) {
 	cfg, m := testingconfig.Config(t)
 	processPlugins(cfg)
 
@@ -403,15 +403,40 @@ func TestDiff_SkippedCommentPatchesTheFlag(t *testing.T) {
 	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
 	m.VCS.EXPECT().
 		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
-		Return(vcs.PostResult{SkipReason: "not updating comment since the latest one matches exactly"}, nil)
+		Return(vcs.PostResult{Body: "comment body", SkipReason: "not updating comment since the latest one matches exactly"}, nil)
 	setupEventsMocks(m)
 
 	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
 	require.NoError(t, err)
 }
 
+// A skip because a newer comment won the race leaves someone else's body on the
+// pull request, so this run must not claim it.
+func TestDiff_NewerCommentIsNotSaved(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+
+	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{Body: "a newer comment body", SkipReason: "not updating comment since the latest one is newer"}, nil)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+
+	m.Dashboard.AssertNotCalled(t, "SavePostedPrComment", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // A post that never succeeded must not be recorded as one.
-func TestDiff_FailedPostDoesNotPatchTheFlag(t *testing.T) {
+func TestDiff_FailedPostIsNotSaved(t *testing.T) {
 	cfg, m := testingconfig.Config(t)
 	processPlugins(cfg)
 

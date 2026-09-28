@@ -451,7 +451,8 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 		runOpts.HeadResult = headResult
 		runOpts.GuardrailResults = guardrailResults
 		runOpts.BudgetResults = budgetResults
-		// Nothing is posted yet. savePostedComment below patches it to the truth.
+		// Nothing is posted yet. The dashboard stores no comment body until
+		// savePostedComment saves it below.
 		runOpts.CommentPosted = false
 		runOpts.Currency = headResult.Currency
 		runOpts.Command = "comment"
@@ -497,17 +498,18 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	return nil
 }
 
-// savePostedComment records on the run that a comment is on the pull request.
-// The flag ships inside the AddRun payload, which is built before the post, so
-// this patch is the only place it can be a fact rather than a guess.
+// savePostedComment records the comment body that is on the pull request.
+// The body is what the dashboard reads for posted / not posted, and it is only
+// known after the post, so this is the only place it can be a fact.
 func savePostedComment(ctx context.Context, client dashboard.Client, runID, body string, result vcs.PostResult) {
-	// A skip under BehaviorUpdate means an identical or newer comment is already
-	// on the pull request, so the user can see a comment either way.
-	if runID == "" || (!result.Posted && result.SkipReason == "") {
+	// A skip means an existing comment was left in place. Only record it when
+	// that comment is ours; a newer one belongs to another run, and claiming it
+	// would credit this run with text it did not post.
+	if runID == "" || (!result.Posted && result.Body != body) {
 		return
 	}
 
-	// Cost prevention is gated on the flag, but a comment the user can already
+	// Cost prevention is gated on the body, but a comment the user can already
 	// see is not worth failing the run over.
 	saved, err := client.SavePostedPrComment(ctx, runID, body)
 	if err != nil {
