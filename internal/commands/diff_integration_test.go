@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/infracost/ci/internal/api/dashboard"
+	"github.com/infracost/ci/internal/api/dashboard/graphql"
 	"github.com/infracost/ci/internal/config"
 	testingconfig "github.com/infracost/ci/internal/config/testing"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"
@@ -171,8 +173,18 @@ func runDiffWithArgs(t *testing.T, cfg *config.Config, m *testingconfig.Mocks, b
 	if err != nil {
 		return &ScanResult{}, err
 	}
+	// The mock stands in for a provider client. --comment-out-file is about
+	// which client diff gets, so that case builds the real one.
+	var vcsClient vcs.VCS = m.VCS
+	if extra.commentOutFile != "" {
+		vcsClient, err = newVCSClient(context.Background(), cfg, &extra, vcsCtx)
+		if err != nil {
+			return &ScanResult{}, err
+		}
+	}
+
 	var results ScanResult
-	err = diff(cfg, &extra, vcsCtx, m.VCS, &results)
+	err = diff(cfg, &extra, vcsCtx, vcsClient, &results)
 	return &results, err
 }
 
@@ -388,6 +400,7 @@ func TestDiff_PostedCommentIsSaved(t *testing.T) {
 func TestDiff_IdenticalCommentIsSaved(t *testing.T) {
 	cfg, m := testingconfig.Config(t)
 	processPlugins(cfg)
+	postedAt := time.Now()
 
 	m.Dashboard.EXPECT().
 		RunParameters(mock.Anything, mock.Anything, mock.Anything).
@@ -401,9 +414,14 @@ func TestDiff_IdenticalCommentIsSaved(t *testing.T) {
 		Once()
 
 	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	// Tagged, as every provider returns it: the comment on the pull request is
+	// the generated body with the provider's marker on it.
 	m.VCS.EXPECT().
 		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
-		Return(vcs.PostResult{Body: "comment body", SkipReason: "not updating comment since the latest one matches exactly"}, nil)
+		Return(vcs.PostResult{
+			Body:       vcs.AddMarkdownTags("comment body", "infracost-comment", &postedAt),
+			SkipReason: "not updating comment since the latest one matches exactly",
+		}, nil)
 	setupEventsMocks(m)
 
 	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
@@ -923,4 +941,139 @@ func writeTestCA(t *testing.T) string {
 	path := filepath.Join(t.TempDir(), "ca.pem")
 	require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
 	return path
+}
+
+// noRetryDelay drops the save retry wait for the duration of one test. The
+// delay is package state, so it is restored for whatever runs next.
+func noRetryDelay(t *testing.T) {
+	t.Helper()
+	previous := savePostedCommentRetryDelay
+	savePostedCommentRetryDelay = 0
+	t.Cleanup(func() { savePostedCommentRetryDelay = previous })
+}
+
+// A 5xx from the dashboard is retried once: the comment is on the pull request
+// and this is the only record of it.
+func TestDiff_SaveIsRetriedOnServerError(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+	noRetryDelay(t)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(false, &graphql.StatusError{Status: http.StatusBadGateway}).
+		Once()
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(true, nil).
+		Once()
+
+	setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+}
+
+// A 4xx is the same answer twice, so it is not retried.
+func TestDiff_SaveIsNotRetriedOnClientError(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(false, errors.New("run not found")).
+		Once()
+
+	setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+}
+
+// The retry is one attempt, not a loop: a second 5xx warns and gives up. A
+// third call would find no expectation and fail the test.
+func TestDiff_SaveGivesUpAfterSecondServerError(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+	noRetryDelay(t)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(false, &graphql.StatusError{Status: http.StatusBadGateway}).
+		Twice()
+
+	setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	// The comment is on the pull request, so the run still succeeds.
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+}
+
+// --comment-out-file needs no token and contacts no provider, so it bypasses
+// both the host check and the token checks.
+func TestNewVCSClient_CommentOutFile(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab", "azure_repos", "bitbucket"} {
+		t.Run(provider, func(t *testing.T) {
+			// A github.com URL under a non-github provider would normally be a
+			// host mismatch; no token is set either.
+			vcsCtx := diffContext{provider: provider, repoURL: testRepoURL, prNumber: testPRNumber}
+			args := diffArgs{commentOutFile: filepath.Join(t.TempDir(), "comment.md")}
+
+			client, err := newVCSClient(context.Background(), new(config.Config), &args, vcsCtx)
+			require.NoError(t, err)
+			require.IsType(t, &fileVCS{}, client)
+		})
+	}
+}
+
+// A run that writes the comment to a file posted nothing, so the dashboard
+// must not be told a comment exists.
+func TestDiff_CommentOutFileIsNotSaved(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+	path := filepath.Join(t.TempDir(), "comment.md")
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.MatchedBy(func(input dashboard.RunInput) bool {
+			return input.ClientPostedComment != nil && !*input.ClientPostedComment
+		})).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	setupEventsMocks(m)
+
+	_, err := runDiffWithArgs(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"),
+		filepath.Join(testdataDir(), "basic", "head"), diffArgs{commentOutFile: path})
+	require.NoError(t, err)
+
+	written, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(written), "Infracost")
+	// Tagged like a provider would tag it, so the job that posts the file
+	// leaves a comment the next run can find.
+	assert.Contains(t, string(written), "[//]: <> (infracost-comment")
+
+	m.Dashboard.AssertNotCalled(t, "SavePostedPrComment", mock.Anything, mock.Anything, mock.Anything)
 }

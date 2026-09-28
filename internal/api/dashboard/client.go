@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"strings"
 
@@ -254,6 +256,25 @@ type Client interface {
 }
 
 var _ Client = (*client)(nil)
+
+// Retryable reports whether err is a failure a second attempt could clear: a
+// 5xx, or a transport error, which is what a restart or a failover in flight
+// looks like. A bad endpoint costs one retry; a lost write costs the record.
+func Retryable(err error) bool {
+	var statusErr *graphql.StatusError
+	if errors.As(err, &statusErr) {
+		return true
+	}
+
+	// A connection dropped after the headers surfaces while decoding the body,
+	// not as a net.Error.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
 
 type client struct {
 	client *http.Client

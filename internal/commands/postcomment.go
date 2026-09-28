@@ -30,6 +30,10 @@ var defaultRetryPolicy = retryPolicy{
 	waitBudget: 90 * time.Second,
 }
 
+// The comment is already on the pull request by this point, so the retry is
+// short: it covers a restart or a failover, not a sustained outage.
+var savePostedCommentRetryDelay = 2 * time.Second
+
 // postComment posts body, retrying transient failures within p, and returns the
 // total time it spent waiting. The behavior is fixed: only BehaviorUpdate
 // converges on a retry, finding the comment a lost first response may have made.
