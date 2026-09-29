@@ -42,8 +42,14 @@ const (
 	azureContributeHint = `the Azure build identity is missing the "Contribute to pull requests" permission: see ` + azureDocsURL + "#403-error-when-posting-to-azure-repos"
 	azureReadHint       = `the Azure build identity cannot read the repository: check the repository still exists and the identity has Read, before looking at "Contribute to pull requests": see ` + azureDocsURL + "#403-error-when-posting-to-azure-repos"
 	azureForbiddenHint  = `the Azure post was forbidden: the token may lack repository Read, or the build identity may lack "Contribute to pull requests": see ` + azureDocsURL + "#403-error-when-posting-to-azure-repos"
-	azureTokenHint      = "the Azure token is invalid or expired: check SYSTEM_ACCESSTOKEN is mapped to System.AccessToken, or that AZURE_DEVOPS_EXT_PAT holds a live PAT, or set --azure-token. This is not a permission problem: see " + azureDocsURL
-	azureSignInPageHint = "Azure redirected to its sign-in page rather than answering, so the token was never usable: check SYSTEM_ACCESSTOKEN is mapped to System.AccessToken, or that AZURE_DEVOPS_EXT_PAT holds a live PAT, or set --azure-token. This is not a permission problem: see " + azureDocsURL
+
+	// A PAT authorises its owner, not the build identity, and carries its own
+	// scopes. Sending a PAT user to the build service's permissions is a dead end.
+	azurePATContributeHint = `the Azure PAT cannot write to the repository: check it has the Code (Read & write) scope, and that its owner has the "Contribute to pull requests" permission: see ` + azureDocsURL + "#403-error-when-posting-to-azure-repos"
+	azurePATReadHint       = `the Azure PAT cannot read the repository: check the repository still exists, the PAT has the Code scope, and its owner has Read, before looking at "Contribute to pull requests": see ` + azureDocsURL + "#403-error-when-posting-to-azure-repos"
+	azurePATForbiddenHint  = `the Azure post was forbidden: check the PAT has the Code (Read & write) scope, and that its owner has repository Read and "Contribute to pull requests": see ` + azureDocsURL + "#403-error-when-posting-to-azure-repos"
+	azureTokenHint         = "the Azure token is invalid or expired: check SYSTEM_ACCESSTOKEN is mapped to System.AccessToken, or that AZURE_DEVOPS_EXT_PAT holds a live PAT, or set --azure-token. This is not a permission problem: see " + azureDocsURL
+	azureSignInPageHint    = "Azure redirected to its sign-in page rather than answering, so the token was never usable: check SYSTEM_ACCESSTOKEN is mapped to System.AccessToken, or that AZURE_DEVOPS_EXT_PAT holds a live PAT, or set --azure-token. This is not a permission problem: see " + azureDocsURL
 )
 
 // fillAzurePullRequest fills the title and author Azure Pipelines has no
@@ -199,9 +205,13 @@ func fetchAzurePullRequest(ctx context.Context, apiURL, token string, tlsConfig 
 // Azure's own error names PullRequestContribute, the API identifier, not
 // "Contribute to pull requests", the label on the settings page.
 //
+// token picks which principal a 403 is about: a PAT authorises its owner and
+// carries its own scopes, an OAuth System.AccessToken authorises the build
+// identity. The length test is the one pkg/vcs/azure uses on the wire.
+//
 // Returns "" when there is nothing specific to say. Azure-only: every other
 // provider needs its own permission name, and shares nothing but the plumbing.
-func azurePostHint(provider string, err error) string {
+func azurePostHint(provider, token string, err error) string {
 	if provider != vcsurl.ProviderAzureRepos {
 		return ""
 	}
@@ -220,14 +230,18 @@ func azurePostHint(provider string, err error) string {
 	case http.StatusFound, http.StatusNonAuthoritativeInfo:
 		return azureSignInPageHint
 	case http.StatusForbidden:
+		contribute, read, both := azureContributeHint, azureReadHint, azureForbiddenHint
+		if len(token) == azurePATLength {
+			contribute, read, both = azurePATContributeHint, azurePATReadHint, azurePATForbiddenHint
+		}
 		// PostComment reads before it writes, and only the write needs Contribute.
 		switch postErr.Op {
 		case vcs.OpCreate, vcs.OpUpdate, vcs.OpDelete:
-			return azureContributeHint
+			return contribute
 		case vcs.OpList:
-			return azureReadHint
+			return read
 		default:
-			return azureForbiddenHint
+			return both
 		}
 	}
 	return ""
