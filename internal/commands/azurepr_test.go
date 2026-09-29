@@ -4,14 +4,19 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/vcs/pkg/vcs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -261,5 +266,83 @@ func TestSetAzureAuth(t *testing.T) {
 			setAzureAuth(req, tt.token)
 			assert.Equal(t, tt.want, req.Header.Get("Authorization"))
 		})
+	}
+}
+
+func TestAzurePostHint(t *testing.T) {
+	// A 52-character token is a PAT; anything else is the OAuth System.AccessToken.
+	pat := strings.Repeat("p", azurePATLength)
+
+	tests := []struct {
+		name     string
+		provider string
+		token    string
+		err      error
+		want     string
+	}{
+		{name: "403 creating names contribute", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpCreate}, want: azureContributeHint},
+		{name: "403 updating names contribute", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpUpdate}, want: azureContributeHint},
+		{name: "403 deleting names contribute", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpDelete}, want: azureContributeHint},
+		// The thread lookup needs repository Read, not Contribute.
+		{name: "403 listing names read", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpList}, want: azureReadHint},
+		// What a vcs release predating PostError.Op gives: name both causes.
+		{name: "403 without an op names both", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden}, want: azureForbiddenHint},
+		// A PAT authorises its owner and carries its own scopes, so the build
+		// service's permissions are the wrong page to send its user to.
+		{name: "403 writing with a PAT names the scope", provider: vcsurl.ProviderAzureRepos, token: pat,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpUpdate}, want: azurePATContributeHint},
+		{name: "403 listing with a PAT names the scope", provider: vcsurl.ProviderAzureRepos, token: pat,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpList}, want: azurePATReadHint},
+		{name: "403 without an op with a PAT names both", provider: vcsurl.ProviderAzureRepos, token: pat,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden}, want: azurePATForbiddenHint},
+		// A bearer System.AccessToken is any other length.
+		{name: "403 writing with a bearer token names the identity", provider: vcsurl.ProviderAzureRepos, token: "oauth-token",
+			err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpUpdate}, want: azureContributeHint},
+		// The token does not pick the text for a status that is not about a grant.
+		{name: "401 with a PAT is still the token", provider: vcsurl.ProviderAzureRepos, token: pat,
+			err: &vcs.PostError{StatusCode: http.StatusUnauthorized, Op: vcs.OpUpdate}, want: azureTokenHint},
+		{name: "401 is the token", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusUnauthorized, Op: vcs.OpUpdate}, want: azureTokenHint},
+		{name: "302 is the sign-in redirect", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusFound, Op: vcs.OpUpdate}, want: azureSignInPageHint},
+		{name: "203 is the sign-in page", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusNonAuthoritativeInfo, Op: vcs.OpUpdate}, want: azureSignInPageHint},
+		{name: "500 has nothing to say", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusInternalServerError, Op: vcs.OpUpdate}},
+		// RetryAfter comes off rate-limit headers Azure sends on any status, so it
+		// must not silence the permission the 403 is really about.
+		{name: "403 with a retry delay still names contribute", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpUpdate, RetryAfter: time.Second}, want: azureContributeHint},
+		{name: "429 is a rate limit", provider: vcsurl.ProviderAzureRepos,
+			err: &vcs.PostError{StatusCode: http.StatusTooManyRequests, Op: vcs.OpUpdate, RetryAfter: time.Second}},
+		// giveUp wraps with %w, so the hint has to survive the wrapping.
+		{name: "wrapped post error still matches", provider: vcsurl.ProviderAzureRepos,
+			err: fmt.Errorf("giving up: %w", &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpUpdate}), want: azureContributeHint},
+		{name: "not a post error", provider: vcsurl.ProviderAzureRepos, err: errors.New("403 Forbidden")},
+		{name: "nil error", provider: vcsurl.ProviderAzureRepos},
+		{name: "another provider", provider: vcsurl.ProviderGitHub,
+			err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpUpdate}},
+		{name: "no provider", err: &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpUpdate}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, azurePostHint(tt.provider, tt.token, tt.err))
+		})
+	}
+}
+
+// The hint is one line: it goes to the log beside a one-line error, and a
+// multi-line string there would reflow badly in every CI console.
+func TestAzurePostHintIsOneLine(t *testing.T) {
+	for _, hint := range []string{azureContributeHint, azureReadHint, azureForbiddenHint,
+		azurePATContributeHint, azurePATReadHint, azurePATForbiddenHint, azureTokenHint, azureSignInPageHint} {
+		assert.NotContains(t, hint, "\n")
+		assert.Contains(t, hint, azureDocsURL)
 	}
 }

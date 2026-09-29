@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -18,6 +19,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +27,8 @@ import (
 	"github.com/infracost/ci/internal/api/dashboard/graphql"
 	"github.com/infracost/ci/internal/config"
 	testingconfig "github.com/infracost/ci/internal/config/testing"
+	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/cli/pkg/logging"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"
 	"github.com/infracost/proto/gen/go/infracost/rational"
 	"github.com/infracost/vcs/pkg/vcs"
@@ -1076,4 +1080,85 @@ func TestDiff_CommentOutFileIsNotSaved(t *testing.T) {
 	assert.Contains(t, string(written), "[//]: <> (infracost-comment")
 
 	m.Dashboard.AssertNotCalled(t, "SavePostedPrComment", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// testAzureRepoURL is an Azure Repos URL because resolvePullRequest builds the
+// pull request URL from the provider and this URL together.
+const testAzureRepoURL = "https://dev.azure.com/acme/proj/_git/repo"
+
+// syncBuffer is the log sink: the plugin stdio goroutines log for the whole run,
+// and outputRouter drops its own lock before writing to the target.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+// captureWarnings points the logger at a buffer. testingconfig.Config logs to
+// t.Log, which a test cannot read back; Process rebuilds the logger on the
+// writer SetOutput swaps, and only does so once per test binary.
+func captureWarnings(t *testing.T, cfg *config.Config) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	t.Cleanup(logging.SetOutput(buf))
+	cfg.Logging.Process()
+	// A second caller in this binary gets a logger still bound elsewhere, so say
+	// which of the two failed rather than leaving an empty buffer to explain.
+	logging.Warnf("captureWarnings sentinel")
+	require.Contains(t, buf.String(), "captureWarnings sentinel",
+		"the logger is not writing to this buffer: logging.Process already ran in this test binary")
+	buf.Reset()
+	return buf
+}
+
+// A 403 on the write names the permission to grant. Azure's own error names
+// PullRequestContribute, which is not the label on the settings page.
+func TestDiff_AzureWriteForbiddenNamesThePermission(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+	// resolveVCSProvider reads this and never the repository URL.
+	cfg.VCSProvider = vcsurl.ProviderAzureRepos
+	logs := captureWarnings(t, cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+
+	m.VCS.EXPECT().GenerateComment(mock.Anything).Return("comment body", nil)
+	m.VCS.EXPECT().
+		PostComment(mock.Anything, "comment body", vcs.BehaviorUpdate).
+		Return(vcs.PostResult{}, &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpUpdate})
+
+	_, err := runDiffWithArgs(t, cfg, m,
+		filepath.Join(testdataDir(), "basic", "base"),
+		filepath.Join(testdataDir(), "basic", "head"),
+		diffArgs{repoURL: testAzureRepoURL})
+	// Pins the failure to the post: any earlier failure would satisfy require.Error.
+	var postErr *vcs.PostError
+	require.ErrorAs(t, err, &postErr)
+	require.Equal(t, http.StatusForbidden, postErr.StatusCode)
+
+	assert.Contains(t, logs.String(), "Contribute to pull requests")
+	// Warned, not wrapped: the error is pushed as an infracost-error event.
+	assert.NotContains(t, err.Error(), "Contribute to pull requests")
 }
