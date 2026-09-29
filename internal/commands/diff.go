@@ -490,6 +490,11 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 
 	postResult, waited, err := postComment(ctx, vcsClient, body, defaultRetryPolicy)
 	if err != nil {
+		// Warned, not wrapped: the returned error is pushed as an infracost-error
+		// event, and fixed prose does not belong in every one of those.
+		if hint := azurePostHint(vcsCtx.provider, err); hint != "" {
+			logging.Warnf("%s", hint)
+		}
 		return fmt.Errorf("failed to post comment: %w", err)
 	}
 	if postResult.SkipReason != "" {

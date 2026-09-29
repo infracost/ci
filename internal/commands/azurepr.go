@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/infracost/ci/internal/config"
 	"github.com/infracost/ci/internal/vcsurl"
 	"github.com/infracost/cli/pkg/logging"
+	"github.com/infracost/vcs/pkg/vcs"
 )
 
 // azurePRTimeout bounds the lookup: a cost comment must not wait on metadata.
@@ -32,6 +34,17 @@ const azurePATLength = 52
 
 // azurePRMaxBody bounds the response: two fields are read from it.
 const azurePRMaxBody = 1 << 20
+
+// Azure hint texts. One line each, no menu path: the docs page carries the menu,
+// and a second copy of it would drift when Microsoft renames the settings page.
+const (
+	azureDocsURL        = "https://www.infracost.io/docs/integrations/azure_pipelines/"
+	azureContributeHint = `the Azure build identity is missing the "Contribute to pull requests" permission: see ` + azureDocsURL + "#403-error-when-posting-to-azure-repos"
+	azureReadHint       = `the Azure build identity cannot read the repository: check the repository still exists and the identity has Read, before looking at "Contribute to pull requests": see ` + azureDocsURL + "#403-error-when-posting-to-azure-repos"
+	azureForbiddenHint  = `the Azure post was forbidden: the token may lack repository Read, or the build identity may lack "Contribute to pull requests": see ` + azureDocsURL + "#403-error-when-posting-to-azure-repos"
+	azureTokenHint      = "the Azure token is invalid or expired: check SYSTEM_ACCESSTOKEN is mapped to System.AccessToken, or that AZURE_DEVOPS_EXT_PAT holds a live PAT, or set --azure-token. This is not a permission problem: see " + azureDocsURL
+	azureSignInPageHint = "Azure redirected to its sign-in page rather than answering, so the token was never usable: check SYSTEM_ACCESSTOKEN is mapped to System.AccessToken, or that AZURE_DEVOPS_EXT_PAT holds a live PAT, or set --azure-token. This is not a permission problem: see " + azureDocsURL
+)
 
 // fillAzurePullRequest fills the title and author Azure Pipelines has no
 // predefined variable for. It is the one lookup outside config.InferVCS: it
@@ -180,4 +193,42 @@ func fetchAzurePullRequest(ctx context.Context, apiURL, token string, tlsConfig 
 		return pr, err
 	}
 	return pr, nil
+}
+
+// azurePostHint names what to fix when a comment post failed on Azure Repos.
+// Azure's own error names PullRequestContribute, the API identifier, not
+// "Contribute to pull requests", the label on the settings page.
+//
+// Returns "" when there is nothing specific to say. Azure-only: every other
+// provider needs its own permission name, and shares nothing but the plumbing.
+func azurePostHint(provider string, err error) string {
+	if provider != vcsurl.ProviderAzureRepos {
+		return ""
+	}
+
+	var postErr *vcs.PostError
+	if !errors.As(err, &postErr) {
+		return ""
+	}
+	// Rate limits are read off the status, not RetryAfter: that is filled from
+	// ambient rate-limit headers on any status, a real 403 included.
+	switch postErr.StatusCode {
+	case http.StatusUnauthorized:
+		return azureTokenHint
+	// 302 is what Azure sends; 203 is the sign-in page it points at, seen by a
+	// client that followed the redirect. Neither got as far as a permission.
+	case http.StatusFound, http.StatusNonAuthoritativeInfo:
+		return azureSignInPageHint
+	case http.StatusForbidden:
+		// PostComment reads before it writes, and only the write needs Contribute.
+		switch postErr.Op {
+		case vcs.OpCreate, vcs.OpUpdate, vcs.OpDelete:
+			return azureContributeHint
+		case vcs.OpList:
+			return azureReadHint
+		default:
+			return azureForbiddenHint
+		}
+	}
+	return ""
 }
