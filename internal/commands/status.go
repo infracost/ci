@@ -63,7 +63,7 @@ func resolveStatusPullRequest(cfg *config.Config, args *statusArgs) (string, err
 		return "", fmt.Errorf("invalid status %q: must be OPEN, MERGED, or CLOSED", args.status)
 	}
 
-	provider, err := resolveVCSProvider(cfg)
+	provider, err := registerVCSProvider(cfg)
 	if err != nil {
 		return "", err
 	}

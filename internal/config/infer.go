@@ -66,10 +66,10 @@ func InferVCS(cfg *Config) Inferences {
 		return Inferences{}
 	}
 
-	// Pin the detected name so the run metadata, the events payload and any
+	// Pin the normalised name so the run metadata, the events payload and any
 	// plugin subprocess agree on one string without re-deriving it.
 	if !labelled {
-		_ = os.Setenv("INFRACOST_CI_PLATFORM", platform)
+		_ = os.Setenv("INFRACOST_CI_PLATFORM", events.NormalizedCIPlatform())
 	}
 
 	if cfg.VCSProvider == "" {

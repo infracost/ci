@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/infracost/ci/internal/api"
+	"github.com/infracost/ci/internal/api/events"
 	"github.com/infracost/ci/internal/config"
 	"github.com/infracost/ci/internal/git"
 	"github.com/infracost/ci/internal/vcsurl"
@@ -60,7 +61,7 @@ func scan(cfg *config.Config, args *scanArgs) error {
 
 	// A bad value fails here; an absent one is only fatal for the upload, so
 	// the error is kept rather than returned.
-	provider, providerErr := resolveVCSProvider(cfg)
+	provider, providerErr := registerVCSProvider(cfg)
 	if providerErr != nil && cfg.VCSProvider != "" {
 		return providerErr
 	}
@@ -117,7 +118,7 @@ func scan(cfg *config.Config, args *scanArgs) error {
 	runOpts := config.RunInputOptions{
 		CommentPosted:     false,
 		Command:           "upload",
-		CIPlatform:        ciPlatform(),
+		CIPlatform:        events.RunMetadataCIPlatform(),
 		VCSProvider:       provider,
 		RepoURL:           args.repoURL,
 		RepoID:            runParams.RepositoryID,

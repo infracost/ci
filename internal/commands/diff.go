@@ -9,6 +9,7 @@ import (
 
 	"github.com/infracost/ci/internal/api"
 	"github.com/infracost/ci/internal/api/dashboard"
+	"github.com/infracost/ci/internal/api/events"
 	"github.com/infracost/ci/internal/config"
 	"github.com/infracost/ci/internal/git"
 	"github.com/infracost/ci/internal/vcsurl"
@@ -150,7 +151,7 @@ func diffCommand(cfg *config.Config, results *ScanResult) (*cobra.Command, *diff
 // resolveDiffContext collapses environment, flags and git into the single set
 // of values the run is uploaded and judged with.
 func resolveDiffContext(ctx context.Context, cfg *config.Config, args *diffArgs) (diffContext, error) {
-	provider, err := resolveVCSProvider(cfg)
+	provider, err := registerVCSProvider(cfg)
 	if err != nil {
 		return diffContext{}, err
 	}
@@ -370,7 +371,7 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	}
 
 	runOpts := config.RunInputOptions{
-		CIPlatform:        ciPlatform(),
+		CIPlatform:        events.RunMetadataCIPlatform(),
 		VCSProvider:       vcsCtx.provider,
 		RepoURL:           vcsCtx.repoURL,
 		RepoID:            runParams.RepositoryID,
