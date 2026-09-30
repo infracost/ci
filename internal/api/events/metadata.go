@@ -13,10 +13,55 @@ import (
 
 var metadata map[string]interface{}
 
+// ciEnvPlatforms names a platform by an exact variable getCIPlatform looks up.
+var ciEnvPlatforms = map[string]string{
+	"GITHUB_ACTIONS": "github_actions",
+	"GITLAB_CI":      "gitlab_ci",
+	"CIRCLECI":       "circleci",
+	// JENKINS_HOME is controller state and JENKINS_URL needs the root URL
+	// configured, so on a Docker or Kubernetes agent only JENKINS_NODE_COOKIE
+	// is dependable.
+	"JENKINS_HOME":        "jenkins",
+	"JENKINS_URL":         "jenkins",
+	"JENKINS_NODE_COOKIE": "jenkins",
+	"BUILDKITE":           "buildkite",
+	"TFC_RUN_ID":          "tfc",
+	"ENV0_ENVIRONMENT_ID": "env0",
+	"SCALR_RUN_ID":        "scalr",
+	"CF_BUILD_ID":         "codefresh",
+	"TRAVIS":              "travis",
+	"CODEBUILD_CI":        "codebuild",
+	"TEAMCITY_VERSION":    "teamcity",
+	"BUDDYBUILD_BRANCH":   "buddybuild",
+	"BITRISE_IO":          "bitrise",
+	"SEMAPHORE":           "semaphoreci",
+	"APPVEYOR":            "appveyor",
+	"WERCKER_GIT_BRANCH":  "wercker",
+	"MAGNUM":              "magnumci",
+	"SHIPPABLE":           "shippable",
+	"TDDIUM":              "tddium",
+	"GREENHOUSE":          "greenhouse",
+	"CIRRUS_CI":           "cirrusci",
+	"TS_ENV":              "terraspace",
+}
+
+// ciEnvPrefixes names a platform by any variable carrying the prefix.
+var ciEnvPrefixes = map[string]string{
+	"ATLANTIS_":       "atlantis",
+	"BITBUCKET_":      "bitbucket",
+	"CONCOURSE_":      "concourse",
+	"SPACELIFT_":      "spacelift",
+	"HARNESS_":        "harness",
+	"TERRATEAM_":      "terrateam",
+	"KEPTN_":          "keptn",
+	"CLOUDCONCIERGE_": "cloudconcierge",
+}
+
 func init() {
 	metadata = map[string]interface{}{
 		"caller":      getCaller(),
-		"ciPlatform":  getCIPlatform(),
+		"ciPlatform":  NormalizedCIPlatform(),
+		"vcsProvider": "",
 		"cliPlatform": os.Getenv("INFRACOST_CLI_PLATFORM"),
 		"version":     stripVersion(version.Version),
 		"fullVersion": version.Version,
@@ -32,6 +77,24 @@ func init() {
 // that will be included with every event.
 func RegisterMetadata(key string, value interface{}) {
 	metadata[key] = value
+}
+
+// Snapshot returns a copy of the global metadata for scoped mutations.
+func Snapshot() map[string]interface{} {
+	out := make(map[string]interface{}, len(metadata))
+	for k, v := range metadata {
+		out[k] = v
+	}
+	return out
+}
+
+// Restore replaces global metadata with a snapshot returned by Snapshot.
+func Restore(snapshot map[string]interface{}) {
+	next := make(map[string]interface{}, len(snapshot))
+	for k, v := range snapshot {
+		next[k] = v
+	}
+	metadata = next
 }
 
 // GetMetadata retrieves the value for the specified metadata, and false if it doesn't
@@ -95,36 +158,7 @@ func getCIPlatform() string {
 		return ciPlatform
 	}
 
-	for env, platform := range map[string]string{
-		"GITHUB_ACTIONS": "github_actions",
-		"GITLAB_CI":      "gitlab_ci",
-		"CIRCLECI":       "circleci",
-		// JENKINS_HOME is controller state and JENKINS_URL needs the root URL
-		// configured, so on a Docker or Kubernetes agent only JENKINS_NODE_COOKIE
-		// is dependable.
-		"JENKINS_HOME":        "jenkins",
-		"JENKINS_URL":         "jenkins",
-		"JENKINS_NODE_COOKIE": "jenkins",
-		"BUILDKITE":           "buildkite",
-		"TFC_RUN_ID":          "tfc",
-		"ENV0_ENVIRONMENT_ID": "env0",
-		"SCALR_RUN_ID":        "scalr",
-		"CF_BUILD_ID":         "codefresh",
-		"TRAVIS":              "travis",
-		"CODEBUILD_CI":        "codebuild",
-		"TEAMCITY_VERSION":    "teamcity",
-		"BUDDYBUILD_BRANCH":   "buddybuild",
-		"BITRISE_IO":          "bitrise",
-		"SEMAPHORE":           "semaphoreci",
-		"APPVEYOR":            "appveyor",
-		"WERCKER_GIT_BRANCH":  "wercker",
-		"MAGNUM":              "magnumci",
-		"SHIPPABLE":           "shippable",
-		"TDDIUM":              "tddium",
-		"GREENHOUSE":          "greenhouse",
-		"CIRRUS_CI":           "cirrusci",
-		"TS_ENV":              "terraspace",
-	} {
+	for env, platform := range ciEnvPlatforms {
 		if _, ok := os.LookupEnv(env); ok {
 			return platform
 		}
@@ -135,16 +169,7 @@ func getCIPlatform() string {
 		return fmt.Sprintf("azure_devops_%s", os.Getenv("BUILD_REPOSITORY_PROVIDER"))
 	}
 
-	for prefix, platform := range map[string]string{
-		"ATLANTIS_":       "atlantis",
-		"BITBUCKET_":      "bitbucket",
-		"CONCOURSE_":      "concourse",
-		"SPACELIFT_":      "spacelift",
-		"HARNESS_":        "harness",
-		"TERRATEAM_":      "terrateam",
-		"KEPTN_":          "keptn",
-		"CLOUDCONCIERGE_": "cloudconcierge",
-	} {
+	for prefix, platform := range ciEnvPrefixes {
 		for _, k := range os.Environ() {
 			if strings.HasPrefix(k, prefix) {
 				return platform
