@@ -6,8 +6,8 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/infracost/cli v0.0.14-0.20260807035530-c304cbdee40f
 	github.com/infracost/config v0.18.0
-	github.com/infracost/go-proto v1.40.0
-	github.com/infracost/proto v1.167.0
+	github.com/infracost/go-proto v1.43.0
+	github.com/infracost/proto v1.168.0
 	github.com/infracost/vcs v0.10.7
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
