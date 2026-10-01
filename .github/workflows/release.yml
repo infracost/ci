@@ -238,7 +238,7 @@ jobs:
             tar -czf "dist/infracost-scanner_${GOOS}_${GOARCH}.tar.gz" -C bin infracost-scanner
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: infracost-ci_${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/*
