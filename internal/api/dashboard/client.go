@@ -76,12 +76,15 @@ type ProjectResultInput struct {
 	TagPolicyResults    []map[string]interface{}  `json:"tagPolicyResults,omitempty"`
 	FinopsPolicyResults []FinopsPolicyResultInput `json:"finopsPolicyResults,omitempty"`
 
+	// BreakdownSha identifies the project config. The dashboard derives the
+	// result SHA itself and reuses the existing breakdowns row when both match.
+	BreakdownSha string `json:"breakdownSha,omitempty"`
+
 	// Unused — BreakdownResultSha and PastBreakdownResultSha are computed by
 	// the runner from the project name, workspace, errors, warnings, summary,
-	// policy SHA, breakdown SHA, and resource checksums. They allow the
-	// dashboard to deduplicate breakdown records. Requires a BreakdownSHA
-	// input (from a persistent per-project cache) which the scanner does not
-	// maintain. See calculateBreakdownResultSHA in runner/internal/service/runner/addrun.go.
+	// policy SHA, breakdown SHA, and resource checksums. The dashboard derives
+	// the same values from BreakdownSha above when they are absent.
+	// See calculateBreakdownResultSHA in runner/internal/service/runner/addrun.go.
 	// BreakdownResultSha     string `json:"breakdownResultSha,omitempty"`
 	// PastBreakdownResultSha string `json:"pastBreakdownResultSha,omitempty"`
 }

@@ -25,6 +25,11 @@ type RunInputOptions struct {
 	CommentPosted    bool
 	Currency         string
 
+	// TimeGenerated orders runs in the dashboard, which keeps the newest and
+	// drops the rest. Empty means wall clock; a branch run sets the commit's
+	// committer date so a re-run of an older commit loses.
+	TimeGenerated string
+
 	// Command identifies the type of run: "comment" for diff/PR runs,
 	// "upload" for baseline scans.
 	Command string
@@ -180,6 +185,7 @@ func BuildRunInput(opts RunInputOptions) dashboard.RunInput {
 			projectType = string(head.Config.Type)
 			projectPath = head.Config.Path
 			isTerraform = head.Config.Type == "terraform" || head.Config.Type == "terragrunt"
+			pr.BreakdownSha = head.Config.ConfigSHA()
 		}
 
 		pr.Metadata = buildProjectMetadata(head, workspace, projectType, projectPath, opts.Command == "comment")
@@ -241,11 +247,16 @@ func buildRunInputFromMetadata(opts RunInputOptions, projectResults []dashboard.
 		},
 	}
 
+	timeGenerated := opts.TimeGenerated
+	if timeGenerated == "" {
+		timeGenerated = time.Now().UTC().Format(time.RFC3339)
+	}
+
 	posted := opts.CommentPosted
 	input := dashboard.RunInput{
 		ProjectResults:           projectResults,
 		Currency:                 opts.Currency,
-		TimeGenerated:            time.Now().UTC().Format(time.RFC3339),
+		TimeGenerated:            timeGenerated,
 		PoliciesAlreadyEvaluated: true,
 		ClientPostedComment:      &posted,
 		Metadata:                 structToJSON(metadata),
