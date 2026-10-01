@@ -1,9 +1,10 @@
 package commands
 
 import (
-	"github.com/infracost/ci/internal/vcsurl"
 	"testing"
+	"time"
 
+	"github.com/infracost/ci/internal/vcsurl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,4 +132,38 @@ func TestDiffVCSContext_FlagPullRequestURLOverridesEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "https://github.com/infracost/actions/pull/8", vcsCtx.prURL)
 	assert.Equal(t, 8, vcsCtx.prNumber)
+}
+
+func TestCommitTimeGenerated(t *testing.T) {
+	tests := []struct {
+		name          string
+		override      string
+		committerDate string
+		want          string
+	}{
+		{name: "committer date", committerDate: "2024-01-02T03:04:05Z", want: "2024-01-02T03:04:05Z"},
+		{name: "override wins", override: "1700000000", committerDate: "2024-01-02T03:04:05Z", want: "2023-11-14T22:13:20Z"},
+		{name: "empty falls back to wall clock", want: ""},
+		{
+			name:          "a future date falls back to wall clock",
+			committerDate: time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
+			want:          "",
+		},
+		{
+			name:          "an unparseable committer date falls back to wall clock",
+			committerDate: "10000-01-01T00:00:00+00:00",
+			want:          "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := commitTimeGenerated(tt.override, tt.committerDate)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	_, err := commitTimeGenerated("not-a-timestamp", "")
+	require.Error(t, err)
 }

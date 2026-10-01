@@ -2,7 +2,10 @@ package config
 
 import (
 	"testing"
+	"time"
 
+	pkgscanner "github.com/infracost/cli/pkg/scanner"
+	repoconfig "github.com/infracost/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -137,4 +140,44 @@ func assertMetadata(t *testing.T, metadata map[string]any, key, want string) {
 		return
 	}
 	assert.Equal(t, want, metadata[key], key)
+}
+
+func TestBuildRunInput_TimeGenerated(t *testing.T) {
+	t.Run("honoured when set", func(t *testing.T) {
+		input := BuildRunInput(RunInputOptions{TimeGenerated: "2020-01-02T03:04:05Z"})
+		assert.Equal(t, "2020-01-02T03:04:05Z", input.TimeGenerated)
+	})
+
+	t.Run("defaults to now", func(t *testing.T) {
+		before := time.Now().UTC().Add(-time.Second)
+		input := BuildRunInput(RunInputOptions{})
+
+		got, err := time.Parse(time.RFC3339, input.TimeGenerated)
+		require.NoError(t, err)
+		assert.False(t, got.Before(before))
+	})
+}
+
+func TestBuildRunInput_BreakdownSha(t *testing.T) {
+	project := &repoconfig.Project{Name: "project-a", Path: "a"}
+	input := BuildRunInput(RunInputOptions{
+		HeadResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{Name: "project-a", Config: project}},
+		},
+	})
+
+	require.Len(t, input.ProjectResults, 1)
+	assert.Equal(t, project.ConfigSHA(), input.ProjectResults[0].BreakdownSha)
+	assert.Equal(t, input.ProjectResults[0].Metadata.ConfigSha, input.ProjectResults[0].BreakdownSha)
+}
+
+// A project with no config has nothing stable to dedup on, so the field is
+// omitted rather than sent empty.
+func TestBuildRunInput_BreakdownShaOmittedWithoutConfig(t *testing.T) {
+	input := BuildRunInput(RunInputOptions{
+		HeadResult: &DirectoryResult{Projects: []pkgscanner.ProjectResult{{Name: "project-a"}}},
+	})
+
+	require.Len(t, input.ProjectResults, 1)
+	assert.Empty(t, input.ProjectResults[0].BreakdownSha)
 }
