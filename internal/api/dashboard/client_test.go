@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/infracost/ci/internal/api/dashboard/graphql"
 )
 
 func TestSavePostedPrComment(t *testing.T) {
@@ -66,10 +68,12 @@ func TestSavePostedPrComment(t *testing.T) {
 			wantRetryable: true,
 		},
 		{
+			// A 403 is a rejected token; the body only names a cause when a
+			// proxy supplied one, and "forbidden" repeats the status.
 			name:       "forbidden",
 			status:     http.StatusForbidden,
 			response:   `{"message":"forbidden"}`,
-			wantErrMsg: "savePostedPrComment missing from response",
+			wantErrMsg: "the dashboard rejected the authentication token (403 Forbidden). If you are migrating from CI v0.1, CI v2 needs a CLI v2 token, not a v0.1 API key: " + graphql.CLITokenHint,
 		},
 	}
 
@@ -191,6 +195,112 @@ func TestSavePostedPrCommentTruncatedBody(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, saved)
 	assert.True(t, Retryable(err))
+}
+
+// A rejected token is the migrating v0.1 user's first run. The dashboard answers
+// 200 with an UNAUTHENTICATED error, not a 401, so the status is not the signal.
+func TestRunParametersRejectedToken(t *testing.T) {
+	const unauthenticated = `{"errors":[{"message":"Unauthorized","extensions":{"code":"UNAUTHENTICATED","shouldReport":false}}],"data":null}`
+
+	tests := []struct {
+		name       string
+		status     int
+		response   string
+		wantErrMsg string
+	}{
+		{
+			name:       "200 with UNAUTHENTICATED names the CLI v2 token",
+			status:     http.StatusOK,
+			response:   unauthenticated,
+			wantErrMsg: "the dashboard rejected the authentication token. If you are migrating from CI v0.1, CI v2 needs a CLI v2 token, not a v0.1 API key: " + graphql.CLITokenHint,
+		},
+		{
+			// A real CLI v2 token, under-scoped. The migration hint would send its
+			// owner round a loop they have already been round.
+			name:       "missing scopes passes the dashboard's own text through",
+			status:     http.StatusOK,
+			response:   `{"errors":[{"message":"Unauthorized. Missing required scopes: runs:write","extensions":{"code":"UNAUTHENTICATED"}}]}`,
+			wantErrMsg: "the dashboard rejected the authentication token: Unauthorized. Missing required scopes: runs:write",
+		},
+		{
+			// The bare entry comes first; the one naming the scope must still win.
+			name:       "a later entry naming the cause beats a bare Unauthorized",
+			status:     http.StatusOK,
+			response:   `{"errors":[{"message":"Unauthorized","extensions":{"code":"UNAUTHENTICATED"}},{"message":"Unauthorized. Missing required scopes: runs:write","extensions":{"code":"UNAUTHENTICATED"}}]}`,
+			wantErrMsg: "the dashboard rejected the authentication token: Unauthorized. Missing required scopes: runs:write",
+		},
+		{
+			// Not every UNAUTHENTICATED is a migration: the dashboard's own text
+			// is the only thing that distinguishes revoked from never-valid.
+			name:       "a revoked token keeps the dashboard's wording",
+			status:     http.StatusOK,
+			response:   `{"errors":[{"message":"This token has been revoked","extensions":{"code":"UNAUTHENTICATED"}}]}`,
+			wantErrMsg: "the dashboard rejected the authentication token: This token has been revoked",
+		},
+		{
+			name:       "an ordinary graphql error is unchanged",
+			status:     http.StatusOK,
+			response:   `{"errors":[{"message":"User has no associated organization"}]}`,
+			wantErrMsg: "User has no associated organization",
+		},
+		{
+			// A proxy in front of the dashboard, or a token of the wrong type.
+			name:       "401 carries the status",
+			status:     http.StatusUnauthorized,
+			response:   `{"error":"Unauthorized"}`,
+			wantErrMsg: "the dashboard rejected the authentication token (401 Unauthorized). If you are migrating from CI v0.1, CI v2 needs a CLI v2 token, not a v0.1 API key: " + graphql.CLITokenHint,
+		},
+		{
+			name:       "403 carries the status",
+			status:     http.StatusForbidden,
+			response:   `{"error":"Forbidden"}`,
+			wantErrMsg: "the dashboard rejected the authentication token (403 Forbidden). If you are migrating from CI v0.1, CI v2 needs a CLI v2 token, not a v0.1 API key: " + graphql.CLITokenHint,
+		},
+		{
+			// Rotating the Infracost token would not fix this, so the hint must go.
+			name:       "a proxy's own reason replaces the migration hint",
+			status:     http.StatusForbidden,
+			response:   `{"error":"proxy credentials expired"}`,
+			wantErrMsg: "the dashboard rejected the authentication token (403 Forbidden): proxy credentials expired",
+		},
+		{
+			name:       "a non-json proxy body is carried through",
+			status:     http.StatusForbidden,
+			response:   "blocked by egress policy\n",
+			wantErrMsg: "the dashboard rejected the authentication token (403 Forbidden): blocked by egress policy",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.response))
+			}))
+			defer server.Close()
+
+			_, err := newTestClient(server.URL).RunParameters(context.Background(), "https://github.com/org/repo", "main")
+
+			require.EqualError(t, err, tt.wantErrMsg)
+			// Reissuing the token is the only thing that clears this.
+			assert.False(t, Retryable(err))
+		})
+	}
+}
+
+// Every call the client makes goes through the same Query, so the mutations get
+// the hint too — addRun is where an under-scoped token actually fails.
+func TestAddRunRejectedToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"errors":[{"message":"Unauthorized","extensions":{"code":"UNAUTHENTICATED"}}],"data":null}`))
+	}))
+	defer server.Close()
+
+	_, err := newTestClient(server.URL).AddRun(context.Background(), RunInput{})
+
+	var authErr *graphql.AuthError
+	require.ErrorAs(t, err, &authErr)
+	assert.Contains(t, err.Error(), "CI v2 needs a CLI v2 token")
 }
 
 func newTestClient(endpoint string) Client {
