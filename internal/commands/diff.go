@@ -501,11 +501,14 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	if postResult.SkipReason != "" {
 		logging.Warnf("comment not posted: %s", postResult.SkipReason)
 	}
+	// Retry sleep is not compute time, and would skew the metric on rate-limited
+	// runs. Read before the save, which has a retry sleep of its own.
+	runSeconds := (time.Since(startTime) - waited).Seconds()
+
 	savePostedComment(ctx, dashboardClient, runID, body, postResult)
 
 	eventsClient := cfg.Events.Client(httpClient)
-	// Retry sleep is not compute time, and would skew the metric on rate-limited runs.
-	trackRun(ctx, eventsClient, headResult, baseResult, (time.Since(startTime) - waited).Seconds(), "comment")
+	trackRun(ctx, eventsClient, headResult, baseResult, runSeconds, "comment")
 	trackDiff(ctx, eventsClient, headResult, baseResult)
 
 	checkBlockingViolations(data, runParams.Guardrails, results)
