@@ -73,8 +73,8 @@ func scan(cfg *config.Config, args *scanArgs) error {
 		return err
 	}
 
-	if len(cfg.Auth.AuthenticationToken) == 0 {
-		return fmt.Errorf("authentication token is required: set INFRACOST_CLI_AUTHENTICATION_TOKEN")
+	if err := cfg.RequireAuthToken(); err != nil {
+		return err
 	}
 
 	tokenSource, err := cfg.Auth.Token(ctx)

@@ -61,9 +61,12 @@ Data Center and Azure DevOps Server are all derived from the repository URL.
 
 ## Getting started
 
-Two secrets, and nothing else. Set an [Infracost API key](https://dashboard.infracost.io)
-in `INFRACOST_CLI_AUTHENTICATION_TOKEN`, and a token the provider lets you comment
-with. The repository, pull request, branches and run id come from the CI platform's
+Two secrets, and nothing else. Set a **CLI v2 token** in
+`INFRACOST_CLI_AUTHENTICATION_TOKEN`, and a token the provider lets you comment with.
+Create the CLI v2 token at [dashboard.infracost.io](https://dashboard.infracost.io) →
+Organization settings → CLI tokens → **Create CLI v2 tokens**. A v0.1 API key (`ico-…`),
+which is what an existing `INFRACOST_API_KEY` secret usually holds, is **not** accepted
+and the run will fail. The repository, pull request, branches and run id come from the CI platform's
 own variables.
 
 ### What is inferred
@@ -115,7 +118,7 @@ jobs:
       contents: read
       pull-requests: write
     env:
-      INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_API_KEY }}
+      INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_CLI_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -271,7 +274,7 @@ jobs:
           TARGET_BRANCH: $(System.PullRequest.TargetBranch)
       - script: infracost-ci diff --base-path base --head-path head
         env:
-          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
+          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_CLI_TOKEN)
           SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
@@ -285,6 +288,12 @@ comment: **Project Settings → Repositories →** the repo **→ Security**, se
 `Build Service`, set **Contribute to pull requests** to Allow. With *Limit job
 authorization scope to current project* disabled the pipeline runs as **Project
 Collection Build Service** instead, so grant it there.
+
+`INFRACOST_CLI_TOKEN` is a pipeline variable you create, marked **Keep this value
+secret**, holding a CLI v2 token. Azure leaves `$(INFRACOST_CLI_TOKEN)` unexpanded if no
+such variable exists — if you are migrating from a pipeline that used
+`INFRACOST_API_KEY`, add the new variable rather than only editing the YAML. `diff` and
+`scan` refuse the unexpanded literal rather than sending it to the dashboard.
 
 A personal access token works too, via `AZURE_DEVOPS_EXT_PAT`; only a 52-character PAT
 is sent as Basic auth, anything else goes out as a bearer token. `diff` fails without
@@ -325,7 +334,7 @@ jobs:
           TARGET_BRANCH: $(System.PullRequest.TargetBranch)
       - script: infracost-ci diff --base-path base --head-path head
         env:
-          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
+          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_CLI_TOKEN)
           GITHUB_TOKEN: $(GITHUB_TOKEN)
 ```
 
@@ -375,7 +384,7 @@ pipeline {
   }
 
   environment {
-    INFRACOST_CLI_AUTHENTICATION_TOKEN = credentials('infracost-api-key')
+    INFRACOST_CLI_AUTHENTICATION_TOKEN = credentials('infracost-cli-token')
     GITHUB_TOKEN                       = credentials('github-token')
     INFRACOST_VCS_PROVIDER             = 'github'
     INFRACOST_VCS_REPOSITORY_URL       = 'https://github.com/ORG/REPO'
@@ -445,7 +454,7 @@ value, or add something the platform does not expose. Everywhere else, set them 
 
 | Variable | Notes |
 | --- | --- |
-| `INFRACOST_CLI_AUTHENTICATION_TOKEN` | Required by `diff` and `scan`. |
+| `INFRACOST_CLI_AUTHENTICATION_TOKEN` | Required by `diff` and `scan`. A CLI v2 token, not a v0.1 `ico-…` API key. |
 | `INFRACOST_VCS_PROVIDER` | `github`, `gitlab`, `azure_repos` or `bitbucket`. |
 | `INFRACOST_VCS_REPOSITORY_URL` | Repository **web** URL. Never a clone URL with credentials in it. |
 | `INFRACOST_VCS_PULL_REQUEST_ID` | PR number. On GitLab this is the project-scoped `iid`. |
