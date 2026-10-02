@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

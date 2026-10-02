@@ -3,8 +3,8 @@ package commands
 import (
 	"context"
 
-	"github.com/infracost/ci/internal/api/events"
-	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/ci/v2/internal/api/events"
+	"github.com/infracost/ci/v2/internal/config"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	goprotoevent "github.com/infracost/go-proto/pkg/event"
 	"github.com/infracost/proto/gen/go/infracost/provider"

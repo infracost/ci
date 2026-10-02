@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/infracost/ci/internal/api/dashboard/graphql"
+	"github.com/infracost/ci/v2/internal/api/dashboard/graphql"
 )
 
 func TestSavePostedPrComment(t *testing.T) {

@@ -113,7 +113,7 @@ on: [pull_request]
 jobs:
   infracost:
     runs-on: ubuntu-latest
-    container: ghcr.io/infracost/ci:0.1
+    container: ghcr.io/infracost/ci:2
     permissions:
       contents: read
       pull-requests: write
@@ -145,7 +145,7 @@ not an API URL.
 
 ```yaml
 infracost:
-  image: ghcr.io/infracost/ci:0.1
+  image: ghcr.io/infracost/ci:2
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
@@ -171,7 +171,7 @@ To scan the default branch instead, drop the `rules:` and run `scan --path .`.
 ### Bitbucket Pipelines
 
 ```yaml
-image: ghcr.io/infracost/ci:0.1
+image: ghcr.io/infracost/ci:2
 
 # Full history: the shallow default may not contain the destination branch.
 clone:
@@ -256,7 +256,7 @@ jobs:
     # diff is a pull request run: a build of the default branch has no target
     # branch to fetch. Run scan --path . there instead.
     condition: eq(variables['Build.Reason'], 'PullRequest')
-    container: ghcr.io/infracost/ci:0.1
+    container: ghcr.io/infracost/ci:2
     steps:
       - checkout: self
         fetchDepth: 0
@@ -318,7 +318,7 @@ pr:
 jobs:
   - job: infracost
     condition: eq(variables['Build.Reason'], 'PullRequest')
-    container: ghcr.io/infracost/ci:0.1
+    container: ghcr.io/infracost/ci:2
     steps:
       - checkout: self
         fetchDepth: 0
@@ -377,7 +377,7 @@ the run when `INFRACOST_VCS_PULL_REQUEST_ID` gets it.
 pipeline {
   agent {
     docker {
-      image 'ghcr.io/infracost/ci:0.1'
+      image 'ghcr.io/infracost/ci:2'
       // The plugin holds the container open with `cat`, so clear the entrypoint.
       args  '--entrypoint='
     }
@@ -483,8 +483,9 @@ docker run --rm -e INFRACOST_CLI_AUTHENTICATION_TOKEN -v "$PWD:/src" -w /src \
   ghcr.io/infracost/ci:latest scan --path .
 ```
 
-Tags are `latest`, the minor series (`0.1`) and the exact version (`0.1.0`). Only the
-exact version is immutable; pin by digest to pin the bytes:
+Tags are `latest`, the major series (`2`), the minor series (`2.1`) and the exact
+version (`2.1.3`). Pin to `2` to pick up every minor and patch in the 2 range. Only
+the exact version is immutable; pin by digest to pin the bytes:
 
 ```bash
 docker run --rm ghcr.io/infracost/ci@sha256:... --version
@@ -512,7 +513,7 @@ Linux and macOS:
 
 ```bash
 BASE="${INFRACOST_CI_BASE_URL:-${INFRACOST_SCANNER_BASE_URL:-https://github.com/infracost/ci/releases}}"
-REF="latest/download"        # or "download/v0.1.0" to pin
+REF="latest/download"        # or "download/v2.0.0" to pin
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; esac
 SHA=$(command -v sha256sum || echo "shasum -a 256")   # macOS has no sha256sum
@@ -538,7 +539,7 @@ Windows (PowerShell):
 $ProgressPreference = "SilentlyContinue"
 
 $Base = if ($env:INFRACOST_CI_BASE_URL) { $env:INFRACOST_CI_BASE_URL } elseif ($env:INFRACOST_SCANNER_BASE_URL) { $env:INFRACOST_SCANNER_BASE_URL } else { "https://github.com/infracost/ci/releases" }
-$Ref = "latest/download"     # or "download/v0.1.0" to pin
+$Ref = "latest/download"     # or "download/v2.0.0" to pin
 # An emulated x64 host on ARM64 reports AMD64; ARCHITEW6432 holds the real one.
 $Machine = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 $Arch = if ($Machine -eq "ARM64") { "arm64" } else { "amd64" }
@@ -563,6 +564,17 @@ download was not corrupted — not that the host is honest. Only point it at a h
 you trust.
 
 Binary installs need `git` on `PATH`, and the first run downloads the plugins.
+
+### Go
+
+```bash
+go install github.com/infracost/ci/v2@latest   # or @v2.0.0 to pin
+```
+
+Needs Go 1.26 or later. This builds from source, so it skips `checksums.txt` and the
+release archives entirely — the proxy checksum database is what vouches for the
+bytes. Like a binary install, it needs `git` on `PATH` and downloads the plugins on
+first run.
 
 ## Development
 
@@ -590,8 +602,8 @@ docker build -t infracost-ci:dev .
 Push the tag. Nothing else.
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v2.0.0
+git push origin v2.0.0
 ```
 
 Do not use `gh release create`. The workflow drafts the release itself, builds
@@ -602,8 +614,8 @@ pinned download and hand `latest` back to the previous version.
 If that happens, delete the release and the tag, then push the tag again:
 
 ```bash
-gh release delete v0.1.0 --repo infracost/ci --yes
-git push --delete origin v0.1.0
+gh release delete v2.0.0 --repo infracost/ci --yes
+git push --delete origin v2.0.0
 ```
 
 Pushing a `v*.*.*` tag builds six platforms, attaches `checksums.txt`, publishes the
