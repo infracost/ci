@@ -207,7 +207,7 @@ jobs:
             BINARY="infracost-ci.exe"
           fi
           go build \
-            -ldflags "-X github.com/infracost/ci/internal/version.Version=${VERSION}" \
+            -ldflags "-X github.com/infracost/ci/v2/internal/version.Version=${VERSION}" \
             -o "bin/${BINARY}" \
             .
 

@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/infracost/ci/internal/api"
-	"github.com/infracost/ci/internal/api/events"
-	"github.com/infracost/ci/internal/config"
-	"github.com/infracost/ci/internal/git"
-	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/v2/internal/api"
+	"github.com/infracost/ci/v2/internal/api/events"
+	"github.com/infracost/ci/v2/internal/config"
+	"github.com/infracost/ci/v2/internal/git"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/go-proto/pkg/diagnostic"
 	"github.com/spf13/cobra"
 )

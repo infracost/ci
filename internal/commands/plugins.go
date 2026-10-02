@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/ci/v2/internal/config"
 	"github.com/infracost/cli/pkg/plugins"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	"github.com/spf13/cobra"

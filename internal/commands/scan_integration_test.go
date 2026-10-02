@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/infracost/ci/internal/api/dashboard"
-	"github.com/infracost/ci/internal/config"
-	testingconfig "github.com/infracost/ci/internal/config/testing"
+	"github.com/infracost/ci/v2/internal/api/dashboard"
+	"github.com/infracost/ci/v2/internal/config"
+	testingconfig "github.com/infracost/ci/v2/internal/config/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

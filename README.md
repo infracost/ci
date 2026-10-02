@@ -565,6 +565,17 @@ you trust.
 
 Binary installs need `git` on `PATH`, and the first run downloads the plugins.
 
+### Go
+
+```bash
+go install github.com/infracost/ci/v2@latest   # or @v2.0.0 to pin
+```
+
+Needs Go 1.26 or later. This builds from source, so it skips `checksums.txt` and the
+release archives entirely — the proxy checksum database is what vouches for the
+bytes. Like a binary install, it needs `git` on `PATH` and downloads the plugins on
+first run.
+
 ## Development
 
 ```bash

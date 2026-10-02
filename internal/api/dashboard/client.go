@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/infracost/ci/internal/api/dashboard/graphql"
+	"github.com/infracost/ci/v2/internal/api/dashboard/graphql"
 )
 
 type RunParameters struct {

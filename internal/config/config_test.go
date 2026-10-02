@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	"github.com/infracost/ci/internal/api/dashboard/graphql"
+	"github.com/infracost/ci/v2/internal/api/dashboard/graphql"
 	"github.com/infracost/cli/pkg/auth"
 	"github.com/infracost/cli/pkg/config/process"
 	"github.com/spf13/pflag"
