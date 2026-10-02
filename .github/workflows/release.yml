@@ -491,7 +491,7 @@ jobs:
       # arm64 is emulated rather than built on ubuntu-24.04-arm, which is not
       # available on private-repository plans. Only apk and the plugin install
       # are architecture-specific; the binaries are copied, not compiled.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to ghcr.io
@@ -555,7 +555,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
 
       # Only needed while the package inherits the repository's private
       # visibility. Drop it with FIX-726, the way the archive verify has no
