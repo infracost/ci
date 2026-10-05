@@ -207,7 +207,7 @@ jobs:
             BINARY="infracost-ci.exe"
           fi
           go build \
-            -ldflags "-X github.com/infracost/ci/internal/version.Version=${VERSION}" \
+            -ldflags "-X github.com/infracost/ci/v2/internal/version.Version=${VERSION}" \
             -o "bin/${BINARY}" \
             .
 
@@ -491,9 +491,8 @@ jobs:
       # arm64 is emulated rather than built on ubuntu-24.04-arm, which is not
       # available on private-repository plans. Only apk and the plugin install
       # are architecture-specific; the binaries are copied, not compiled.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
-
       - name: Log in to ghcr.io
         env:
           GH_TOKEN: ${{ github.token }}
@@ -555,7 +554,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
 
       # Only needed while the package inherits the repository's private
       # visibility. Drop it with FIX-726, the way the archive verify has no
@@ -668,8 +667,8 @@ jobs:
             --tag "${IMAGE}:${VERSION}" \
             "${IMAGE}@${DIGEST}"
 
-      # latest and the minor tag are what every install recipe points at, so
-      # they only move when publish decided this release claimed latest.
+      # latest, the major tag and the minor tag are what every install recipe points
+      # at, so they only move when publish decided this release claimed latest.
       - name: Apply the floating tags
         if: needs.publish.outputs.latest == 'true'
         env:
@@ -691,6 +690,7 @@ jobs:
           fi
 
           docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION%%.*}" \
             --tag "${IMAGE}:${VERSION%.*}" \
             --tag "${IMAGE}:latest" \
             "${IMAGE}@${DIGEST}"

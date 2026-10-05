@@ -3,7 +3,7 @@ package trace
 import (
 	"fmt"
 
-	"github.com/infracost/ci/internal/version"
+	"github.com/infracost/ci/v2/internal/version"
 )
 
 var (
