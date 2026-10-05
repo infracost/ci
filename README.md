@@ -118,8 +118,7 @@ jobs:
       contents: read
       pull-requests: write
     env:
-      INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_CLI_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_CLI_AUTHENTICATION_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -276,7 +275,29 @@ jobs:
         env:
           INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_CLI_TOKEN)
           SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  # A push to main has no pull request to diff against, so upload a branch run
+  # as the baseline the next diff compares to.
+  - job: infracost_scan
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
+    container: ghcr.io/infracost/ci:2
+    steps:
+      - checkout: self
+      - script: infracost-ci scan --path .
+        env:
+          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_CLI_TOKEN)
 ```
+
+Every other build reason — a manual queue, a schedule — skips both jobs, the same way the
+GitLab recipe's `rules:` admits only `merge_request_event`. That is deliberate. Azure sets
+no `System.PullRequest.*` variables outside a pull request build, so `diff` would have no
+target branch to fetch and no pull request to key the run to; it would fail rather than
+skip. To re-run a diff, re-queue the build validation check from the pull request — `diff`
+updates its own comment rather than adding one, so repeating it is safe.
+
+The `scan` job needs neither `fetchDepth: 0` nor `SYSTEM_ACCESSTOKEN` — it fetches no base
+branch and posts no comment. The same job suits the GitHub-backed recipe below, minus the
+`SYSTEM_ACCESSTOKEN` line it already omits.
 
 A `pr:` trigger is a GitHub and Bitbucket Cloud feature; on Azure Repos it is ignored
 silently and no PR ever queues a build. Wire the pipeline up as a branch policy
