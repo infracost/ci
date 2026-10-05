@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -83,8 +84,35 @@ func gitConfig(t *testing.T, dir, key, value string) {
 
 func run(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	runWithEnv(t, dir, nil, args...)
+}
+
+func runWithEnv(t *testing.T, dir string, env []string, args ...string) {
+	t.Helper()
 	cmd := exec.Command("git", args...) // #nosec G204 -- test-controlled args
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(out))
+}
+
+// A rebase or cherry-pick preserves %aI and rewrites %cI, so a run ordered on
+// the author date would be stamped with the original commit's time.
+func TestGetCommitInfo_CommitterTimestampIsSeparateFromAuthorDate(t *testing.T) {
+	repo := initRepo(t)
+	runWithEnv(t, repo, []string{"GIT_COMMITTER_DATE=2021-02-03T04:05:06+00:00"},
+		"commit", "-q", "--allow-empty", "--date", "2020-01-02T03:04:05+00:00", "-m", "backdated")
+
+	info := GetCommitInfo(repo, RevParse(repo, "HEAD"))
+	requireInstant(t, "2020-01-02T03:04:05Z", info.Timestamp)
+	requireInstant(t, "2021-02-03T04:05:06Z", info.CommitterTimestamp)
+}
+
+// git renders a zero offset as +00:00 or Z depending on its version, and
+// GetCommitInfo passes its output through unchanged.
+func requireInstant(t *testing.T, want, got string) {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, got)
+	require.NoError(t, err, got)
+	require.Equal(t, want, parsed.UTC().Format(time.RFC3339))
 }

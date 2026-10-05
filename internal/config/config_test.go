@@ -3,6 +3,8 @@ package config
 import (
 	"testing"
 
+	"github.com/infracost/ci/v2/internal/api/dashboard/graphql"
+	"github.com/infracost/cli/pkg/auth"
 	"github.com/infracost/cli/pkg/config/process"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/require"
@@ -49,4 +51,59 @@ func TestConfig_VCSProviderFlagOverridesEnv(t *testing.T) {
 	process.Process(&cfg)
 
 	require.Equal(t, "bitbucket", cfg.VCSProvider)
+}
+
+// The prefix is what lets the message say "this is a v0.1 API key" as a fact.
+// Everything else has to reach the dashboard before anything can be said.
+func TestConfig_RequireAuthToken(t *testing.T) {
+	tests := []struct {
+		name       string
+		token      string
+		wantErrMsg string
+	}{
+		{
+			name:       "empty",
+			wantErrMsg: "authentication token is required: set INFRACOST_CLI_AUTHENTICATION_TOKEN",
+		},
+		{
+			name:       "v0.1 api key",
+			token:      "ico-abcdefghijklmnopqrstuvwxyz012345",
+			wantErrMsg: "INFRACOST_CLI_AUTHENTICATION_TOKEN is a v0.1 API key (ico-…), which CI v2 does not accept: " + graphql.CLITokenHint,
+		},
+		{
+			// Azure substitutes the literal when the pipeline variable is absent.
+			name:       "unexpanded azure variable",
+			token:      "$(INFRACOST_CLI_TOKEN)",
+			wantErrMsg: `INFRACOST_CLI_AUTHENTICATION_TOKEN is an unexpanded pipeline variable ("$(INFRACOST_CLI_TOKEN)"): define it in the pipeline, or set the token directly`,
+		},
+		{
+			name:       "trailing newline",
+			token:      "ics_v1_abcdefghijklmnop_abcdefghijklmnopqrstuvwxyz012345abcdef\n",
+			wantErrMsg: "INFRACOST_CLI_AUTHENTICATION_TOKEN has leading or trailing whitespace, which the Authorization header rejects",
+		},
+		{
+			name:  "cli v2 token",
+			token: "ics_v1_abcdefghijklmnop_abcdefghijklmnopqrstuvwxyz012345abcdef",
+		},
+		{
+			// The dashboard still accepts a JWT on this header, so the check must
+			// not reject what it cannot recognise.
+			name:  "jwt",
+			token: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2ln",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Auth: auth.Config{ExternalConfig: auth.ExternalConfig{AuthenticationToken: auth.AuthenticationToken(tt.token)}}}
+
+			err := cfg.RequireAuthToken()
+
+			if tt.wantErrMsg == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tt.wantErrMsg)
+		})
+	}
 }

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/infracost/ci/internal/api"
-	"github.com/infracost/ci/internal/api/dashboard"
-	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/ci/v2/internal/api"
+	"github.com/infracost/ci/v2/internal/api/dashboard"
+	"github.com/infracost/ci/v2/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -78,8 +78,8 @@ func resolveStatusPullRequest(cfg *config.Config, args *statusArgs) (string, err
 
 func updatePullRequestStatus(cfg *config.Config, prURL, repoURL string, status dashboard.PullRequestStatus) error {
 	ctx := context.Background()
-	if len(cfg.Auth.AuthenticationToken) == 0 {
-		return fmt.Errorf("authentication token is required: set INFRACOST_CLI_AUTHENTICATION_TOKEN")
+	if err := cfg.RequireAuthToken(); err != nil {
+		return err
 	}
 
 	tokenSource, err := cfg.Auth.Token(ctx)

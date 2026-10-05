@@ -61,9 +61,12 @@ Data Center and Azure DevOps Server are all derived from the repository URL.
 
 ## Getting started
 
-Two secrets, and nothing else. Set an [Infracost API key](https://dashboard.infracost.io)
-in `INFRACOST_CLI_AUTHENTICATION_TOKEN`, and a token the provider lets you comment
-with. The repository, pull request, branches and run id come from the CI platform's
+Two secrets, and nothing else. Set a **CLI v2 token** in
+`INFRACOST_CLI_AUTHENTICATION_TOKEN`, and a token the provider lets you comment with.
+Create the CLI v2 token at [dashboard.infracost.io](https://dashboard.infracost.io) →
+Organization settings → CLI tokens → **Create CLI v2 tokens**. A v0.1 API key (`ico-…`),
+which is what an existing `INFRACOST_API_KEY` secret usually holds, is **not** accepted
+and the run will fail. The repository, pull request, branches and run id come from the CI platform's
 own variables.
 
 ### What is inferred
@@ -110,12 +113,12 @@ on: [pull_request]
 jobs:
   infracost:
     runs-on: ubuntu-latest
-    container: ghcr.io/infracost/ci:0.1
+    container: ghcr.io/infracost/ci:2
     permissions:
       contents: read
       pull-requests: write
     env:
-      INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_API_KEY }}
+      INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_CLI_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -142,7 +145,7 @@ not an API URL.
 
 ```yaml
 infracost:
-  image: ghcr.io/infracost/ci:0.1
+  image: ghcr.io/infracost/ci:2
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
@@ -168,7 +171,7 @@ To scan the default branch instead, drop the `rules:` and run `scan --path .`.
 ### Bitbucket Pipelines
 
 ```yaml
-image: ghcr.io/infracost/ci:0.1
+image: ghcr.io/infracost/ci:2
 
 # Full history: the shallow default may not contain the destination branch.
 clone:
@@ -253,7 +256,7 @@ jobs:
     # diff is a pull request run: a build of the default branch has no target
     # branch to fetch. Run scan --path . there instead.
     condition: eq(variables['Build.Reason'], 'PullRequest')
-    container: ghcr.io/infracost/ci:0.1
+    container: ghcr.io/infracost/ci:2
     steps:
       - checkout: self
         fetchDepth: 0
@@ -271,7 +274,7 @@ jobs:
           TARGET_BRANCH: $(System.PullRequest.TargetBranch)
       - script: infracost-ci diff --base-path base --head-path head
         env:
-          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
+          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_CLI_TOKEN)
           SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
@@ -285,6 +288,12 @@ comment: **Project Settings → Repositories →** the repo **→ Security**, se
 `Build Service`, set **Contribute to pull requests** to Allow. With *Limit job
 authorization scope to current project* disabled the pipeline runs as **Project
 Collection Build Service** instead, so grant it there.
+
+`INFRACOST_CLI_TOKEN` is a pipeline variable you create, marked **Keep this value
+secret**, holding a CLI v2 token. Azure leaves `$(INFRACOST_CLI_TOKEN)` unexpanded if no
+such variable exists — if you are migrating from a pipeline that used
+`INFRACOST_API_KEY`, add the new variable rather than only editing the YAML. `diff` and
+`scan` refuse the unexpanded literal rather than sending it to the dashboard.
 
 A personal access token works too, via `AZURE_DEVOPS_EXT_PAT`; only a 52-character PAT
 is sent as Basic auth, anything else goes out as a bearer token. `diff` fails without
@@ -309,7 +318,7 @@ pr:
 jobs:
   - job: infracost
     condition: eq(variables['Build.Reason'], 'PullRequest')
-    container: ghcr.io/infracost/ci:0.1
+    container: ghcr.io/infracost/ci:2
     steps:
       - checkout: self
         fetchDepth: 0
@@ -325,7 +334,7 @@ jobs:
           TARGET_BRANCH: $(System.PullRequest.TargetBranch)
       - script: infracost-ci diff --base-path base --head-path head
         env:
-          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_API_KEY)
+          INFRACOST_CLI_AUTHENTICATION_TOKEN: $(INFRACOST_CLI_TOKEN)
           GITHUB_TOKEN: $(GITHUB_TOKEN)
 ```
 
@@ -368,14 +377,14 @@ the run when `INFRACOST_VCS_PULL_REQUEST_ID` gets it.
 pipeline {
   agent {
     docker {
-      image 'ghcr.io/infracost/ci:0.1'
+      image 'ghcr.io/infracost/ci:2'
       // The plugin holds the container open with `cat`, so clear the entrypoint.
       args  '--entrypoint='
     }
   }
 
   environment {
-    INFRACOST_CLI_AUTHENTICATION_TOKEN = credentials('infracost-api-key')
+    INFRACOST_CLI_AUTHENTICATION_TOKEN = credentials('infracost-cli-token')
     GITHUB_TOKEN                       = credentials('github-token')
     INFRACOST_VCS_PROVIDER             = 'github'
     INFRACOST_VCS_REPOSITORY_URL       = 'https://github.com/ORG/REPO'
@@ -445,7 +454,7 @@ value, or add something the platform does not expose. Everywhere else, set them 
 
 | Variable | Notes |
 | --- | --- |
-| `INFRACOST_CLI_AUTHENTICATION_TOKEN` | Required by `diff` and `scan`. |
+| `INFRACOST_CLI_AUTHENTICATION_TOKEN` | Required by `diff` and `scan`. A CLI v2 token, not a v0.1 `ico-…` API key. |
 | `INFRACOST_VCS_PROVIDER` | `github`, `gitlab`, `azure_repos` or `bitbucket`. |
 | `INFRACOST_VCS_REPOSITORY_URL` | Repository **web** URL. Never a clone URL with credentials in it. |
 | `INFRACOST_VCS_PULL_REQUEST_ID` | PR number. On GitLab this is the project-scoped `iid`. |
@@ -474,8 +483,9 @@ docker run --rm -e INFRACOST_CLI_AUTHENTICATION_TOKEN -v "$PWD:/src" -w /src \
   ghcr.io/infracost/ci:latest scan --path .
 ```
 
-Tags are `latest`, the minor series (`0.1`) and the exact version (`0.1.0`). Only the
-exact version is immutable; pin by digest to pin the bytes:
+Tags are `latest`, the major series (`2`), the minor series (`2.1`) and the exact
+version (`2.1.3`). Pin to `2` to pick up every minor and patch in the 2 range. Only
+the exact version is immutable; pin by digest to pin the bytes:
 
 ```bash
 docker run --rm ghcr.io/infracost/ci@sha256:... --version
@@ -503,7 +513,7 @@ Linux and macOS:
 
 ```bash
 BASE="${INFRACOST_CI_BASE_URL:-${INFRACOST_SCANNER_BASE_URL:-https://github.com/infracost/ci/releases}}"
-REF="latest/download"        # or "download/v0.1.0" to pin
+REF="latest/download"        # or "download/v2.0.0" to pin
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; esac
 SHA=$(command -v sha256sum || echo "shasum -a 256")   # macOS has no sha256sum
@@ -529,7 +539,7 @@ Windows (PowerShell):
 $ProgressPreference = "SilentlyContinue"
 
 $Base = if ($env:INFRACOST_CI_BASE_URL) { $env:INFRACOST_CI_BASE_URL } elseif ($env:INFRACOST_SCANNER_BASE_URL) { $env:INFRACOST_SCANNER_BASE_URL } else { "https://github.com/infracost/ci/releases" }
-$Ref = "latest/download"     # or "download/v0.1.0" to pin
+$Ref = "latest/download"     # or "download/v2.0.0" to pin
 # An emulated x64 host on ARM64 reports AMD64; ARCHITEW6432 holds the real one.
 $Machine = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 $Arch = if ($Machine -eq "ARM64") { "arm64" } else { "amd64" }
@@ -554,6 +564,17 @@ download was not corrupted — not that the host is honest. Only point it at a h
 you trust.
 
 Binary installs need `git` on `PATH`, and the first run downloads the plugins.
+
+### Go
+
+```bash
+go install github.com/infracost/ci/v2@latest   # or @v2.0.0 to pin
+```
+
+Needs Go 1.26 or later. This builds from source, so it skips `checksums.txt` and the
+release archives entirely — the proxy checksum database is what vouches for the
+bytes. Like a binary install, it needs `git` on `PATH` and downloads the plugins on
+first run.
 
 ## Development
 
@@ -581,8 +602,8 @@ docker build -t infracost-ci:dev .
 Push the tag. Nothing else.
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v2.0.0
+git push origin v2.0.0
 ```
 
 Do not use `gh release create`. The workflow drafts the release itself, builds
@@ -593,8 +614,8 @@ pinned download and hand `latest` back to the previous version.
 If that happens, delete the release and the tag, then push the tag again:
 
 ```bash
-gh release delete v0.1.0 --repo infracost/ci --yes
-git push --delete origin v0.1.0
+gh release delete v2.0.0 --repo infracost/ci --yes
+git push --delete origin v2.0.0
 ```
 
 Pushing a `v*.*.*` tag builds six platforms, attaches `checksums.txt`, publishes the
