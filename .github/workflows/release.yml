@@ -113,8 +113,10 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TARGET: ${{ github.sha }}
         run: |
-          TAG_SHA=$(gh api "repos/${REPOSITORY}/commits/${TAG}" --jq .sha 2>/dev/null || true)
-          if [ -n "$TAG_SHA" ] && [ "$TAG_SHA" != "$TARGET" ]; then
+          # gh api prints the error body on stdout, so a tag that does not exist
+          # yet would otherwise read as a SHA that mismatches every target.
+          if TAG_SHA=$(gh api "repos/${REPOSITORY}/commits/${TAG}" --jq .sha 2>/dev/null) \
+            && [ "$TAG_SHA" != "$TARGET" ]; then
             echo "Tag $TAG is at $TAG_SHA but this run builds $TARGET. Release a new version."
             exit 1
           fi
