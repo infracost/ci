@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/infracost/ci/internal/api"
-	"github.com/infracost/ci/internal/api/dashboard"
-	"github.com/infracost/ci/internal/api/events"
-	"github.com/infracost/ci/internal/config"
-	"github.com/infracost/ci/internal/git"
-	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/v2/internal/api"
+	"github.com/infracost/ci/v2/internal/api/dashboard"
+	"github.com/infracost/ci/v2/internal/api/events"
+	"github.com/infracost/ci/v2/internal/config"
+	"github.com/infracost/ci/v2/internal/git"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/cli/pkg/logging"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	"github.com/infracost/go-proto/pkg/diagnostic"
@@ -344,8 +344,8 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	ctx := context.Background()
 	startTime := time.Now()
 
-	if len(cfg.Auth.AuthenticationToken) == 0 {
-		return fmt.Errorf("authentication token is required: set INFRACOST_CLI_AUTHENTICATION_TOKEN")
+	if err := cfg.RequireAuthToken(); err != nil {
+		return err
 	}
 
 	tokenSource, err := cfg.Auth.Token(ctx)

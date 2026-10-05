@@ -10,6 +10,9 @@ type CommitInfo struct {
 	AuthorName  string
 	AuthorEmail string
 	Timestamp   string
+	// CommitterTimestamp is %cI. Unlike the author date a rebase or cherry-pick
+	// rewrites it, so it is the one that orders runs.
+	CommitterTimestamp string
 }
 
 func GetCommitInfo(dir, sha string) CommitInfo {
@@ -17,10 +20,11 @@ func GetCommitInfo(dir, sha string) CommitInfo {
 		return CommitInfo{}
 	}
 	return CommitInfo{
-		Message:     Log(dir, sha, "%s"),
-		AuthorName:  Log(dir, sha, "%aN"),
-		AuthorEmail: Log(dir, sha, "%aE"),
-		Timestamp:   Log(dir, sha, "%aI"),
+		Message:            Log(dir, sha, "%s"),
+		AuthorName:         Log(dir, sha, "%aN"),
+		AuthorEmail:        Log(dir, sha, "%aE"),
+		Timestamp:          Log(dir, sha, "%aI"),
+		CommitterTimestamp: Log(dir, sha, "%cI"),
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/infracost/ci/internal/config"
+	"github.com/infracost/ci/v2/internal/config"
 	"github.com/infracost/cli/pkg/config/process"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"

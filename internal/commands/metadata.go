@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/infracost/ci/internal/api/events"
-	"github.com/infracost/ci/internal/config"
-	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/v2/internal/api/events"
+	"github.com/infracost/ci/v2/internal/config"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 )
 
 // resolveVCSProvider falls back to github when GITHUB_ACTIONS is set, so that

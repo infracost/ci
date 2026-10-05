@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/vcs/pkg/vcs"
 	"github.com/infracost/vcs/pkg/vcs/comment"
 )

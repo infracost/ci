@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/infracost/ci/internal/trace"
+	"github.com/infracost/ci/v2/internal/trace"
 	"golang.org/x/oauth2"
 )
 

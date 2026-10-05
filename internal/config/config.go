@@ -5,15 +5,20 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"strings"
 
-	"github.com/infracost/ci/internal/api/dashboard"
-	"github.com/infracost/ci/internal/api/events"
+	"github.com/infracost/ci/v2/internal/api/dashboard"
+	"github.com/infracost/ci/v2/internal/api/dashboard/graphql"
+	"github.com/infracost/ci/v2/internal/api/events"
 	"github.com/infracost/cli/pkg/auth"
 	"github.com/infracost/cli/pkg/config/process"
 	"github.com/infracost/cli/pkg/environment"
 	"github.com/infracost/cli/pkg/logging"
 	"github.com/infracost/cli/pkg/plugins"
 )
+
+// v01APIKeyPrefix is the prefix every v0.1 dashboard API key carries.
+const v01APIKeyPrefix = "ico-"
 
 // Config holds the shared configuration used by all subcommands.
 type Config struct {
@@ -123,4 +128,38 @@ func (config *Config) TLSConfig() (*tls.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// RequireAuthToken rejects a missing token, and a v0.1 API key by its prefix.
+// The prefix is certain where the API's "Unauthorized" is not — that is equally
+// consistent with a revoked or expired CLI v2 token — so the message can name
+// the problem outright.
+//
+// Negative check only: a positive one would reject an Auth0 JWT, which the
+// dashboard still accepts on this header. Legacy keys predating the prefix fall
+// through to the API, where graphql.AuthError handles them.
+func (config *Config) RequireAuthToken() error {
+	token := string(config.Auth.AuthenticationToken)
+
+	if len(token) == 0 {
+		return fmt.Errorf("authentication token is required: set INFRACOST_CLI_AUTHENTICATION_TOKEN")
+	}
+
+	// Azure passes $(NAME) through verbatim when no such pipeline variable
+	// exists; without this the literal reaches the dashboard and reads as a
+	// rejected token. Same guard as requireToken in diff.go.
+	if strings.HasPrefix(token, "$(") {
+		return fmt.Errorf("INFRACOST_CLI_AUTHENTICATION_TOKEN is an unexpanded pipeline variable (%q): define it in the pipeline, or set the token directly", token)
+	}
+
+	if token != strings.TrimSpace(token) {
+		return fmt.Errorf("INFRACOST_CLI_AUTHENTICATION_TOKEN has leading or trailing whitespace, which the Authorization header rejects")
+	}
+
+	if strings.HasPrefix(token, v01APIKeyPrefix) {
+		return fmt.Errorf("INFRACOST_CLI_AUTHENTICATION_TOKEN is a v0.1 API key (%s…), which CI v2 does not accept: %s",
+			v01APIKeyPrefix, graphql.CLITokenHint)
+	}
+
+	return nil
 }
