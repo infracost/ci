@@ -207,7 +207,7 @@ jobs:
             BINARY="infracost-ci.exe"
           fi
           go build \
-            -ldflags "-X github.com/infracost/ci/internal/version.Version=${VERSION}" \
+            -ldflags "-X github.com/infracost/ci/v2/internal/version.Version=${VERSION}" \
             -o "bin/${BINARY}" \
             .
 
@@ -668,8 +668,8 @@ jobs:
             --tag "${IMAGE}:${VERSION}" \
             "${IMAGE}@${DIGEST}"
 
-      # latest and the minor tag are what every install recipe points at, so
-      # they only move when publish decided this release claimed latest.
+      # latest, the major tag and the minor tag are what every install recipe points
+      # at, so they only move when publish decided this release claimed latest.
       - name: Apply the floating tags
         if: needs.publish.outputs.latest == 'true'
         env:
@@ -691,6 +691,7 @@ jobs:
           fi
 
           docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION%%.*}" \
             --tag "${IMAGE}:${VERSION%.*}" \
             --tag "${IMAGE}:latest" \
             "${IMAGE}@${DIGEST}"

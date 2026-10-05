@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/infracost/ci/internal/config"
-	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/v2/internal/config"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/cli/pkg/logging"
 )
 
@@ -104,6 +104,48 @@ func normaliseTimestamp(name, value string) (string, error) {
 		return "", fmt.Errorf("invalid %s %q: expected Unix epoch seconds or an RFC3339 timestamp", name, value)
 	}
 	return t.Format(time.RFC3339), nil
+}
+
+// futureTimestampBound caps how far ahead a commit date may order a run.
+// Past it the dashboard's generated_at would sit ahead of real time and drop
+// every later run until wall clock caught up.
+const futureTimestampBound = time.Hour
+
+// commitTimeGenerated resolves the timestamp a branch run is ordered by: the
+// committer date, or the INFRACOST_VCS_COMMIT_TIMESTAMP override. Empty means
+// wall clock.
+func commitTimeGenerated(override, committerDate string) (string, error) {
+	if override != "" {
+		value, err := normaliseTimestamp("INFRACOST_VCS_COMMIT_TIMESTAMP", override)
+		if err != nil {
+			return "", err
+		}
+		return dropFutureTimestamp(value), nil
+	}
+
+	// A committer date git renders unparseably is nothing the user set, so it
+	// falls back to wall clock instead of failing the scan.
+	value, err := normaliseTimestamp("committer date", committerDate)
+	if err != nil {
+		logging.Warnf("ignoring the commit's committer date for run ordering: %s", err)
+		return "", nil
+	}
+	return dropFutureTimestamp(value), nil
+}
+
+// dropFutureTimestamp returns "" for a timestamp past futureTimestampBound.
+func dropFutureTimestamp(value string) string {
+	if value == "" {
+		return ""
+	}
+
+	// normaliseTimestamp returns RFC3339, so this cannot fail.
+	t, _ := time.Parse(time.RFC3339, value)
+	if t.After(time.Now().Add(futureTimestampBound)) {
+		logging.Warnf("ignoring commit timestamp %s for run ordering: it is more than %s ahead of now", value, futureTimestampBound)
+		return ""
+	}
+	return value
 }
 
 // warnIgnoredPullRequestEnv logs the pull request variables scan ignores. It

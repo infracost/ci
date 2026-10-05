@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infracost/ci/internal/api/dashboard"
-	"github.com/infracost/ci/internal/api/dashboard/graphql"
-	"github.com/infracost/ci/internal/config"
-	testingconfig "github.com/infracost/ci/internal/config/testing"
-	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/v2/internal/api/dashboard"
+	"github.com/infracost/ci/v2/internal/api/dashboard/graphql"
+	"github.com/infracost/ci/v2/internal/config"
+	testingconfig "github.com/infracost/ci/v2/internal/config/testing"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/cli/pkg/logging"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"
 	"github.com/infracost/proto/gen/go/infracost/rational"
@@ -983,6 +983,41 @@ func TestDiff_SaveIsRetriedOnServerError(t *testing.T) {
 
 	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
 	require.NoError(t, err)
+}
+
+// The save's retry sleep is not compute time either, so it must stay out of
+// the tracked run time, as the post's already does.
+func TestDiff_RetriedSaveIsNotRunTime(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		Return(emptyRunParams(), nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.Anything).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(false, &graphql.StatusError{Status: http.StatusBadGateway}).
+		Once()
+	m.Dashboard.EXPECT().
+		SavePostedPrComment(mock.Anything, testRunID, "comment body").
+		Return(true, nil).
+		Once()
+
+	setupVCSMocks(m)
+	runEvent := setupEventsMocks(m)
+
+	start := time.Now()
+	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+	elapsed := time.Since(start)
+
+	require.GreaterOrEqual(t, elapsed, savePostedCommentRetryDelay, "expected the save retry to sleep")
+	runSeconds, ok := (*runEvent)["runSeconds"].(float64)
+	require.True(t, ok, "expected runSeconds in infracost-run event")
+	assert.LessOrEqual(t, runSeconds, elapsed.Seconds()-savePostedCommentRetryDelay.Seconds())
 }
 
 // A 4xx is the same answer twice, so it is not retried.

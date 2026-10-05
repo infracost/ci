@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	vcsmocks "github.com/infracost/ci/internal/mocks/vcs"
+	vcsmocks "github.com/infracost/ci/v2/internal/mocks/vcs"
 	"github.com/infracost/vcs/pkg/vcs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

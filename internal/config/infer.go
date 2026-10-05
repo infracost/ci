@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infracost/ci/internal/api/events"
+	"github.com/infracost/ci/v2/internal/api/events"
 )
 
 // Inferences records what a platform supplied and what the environment kept,

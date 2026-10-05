@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/infracost/ci/internal/api"
-	"github.com/infracost/ci/internal/api/dashboard"
-	"github.com/infracost/ci/internal/api/events"
-	"github.com/infracost/ci/internal/config"
-	"github.com/infracost/ci/internal/git"
-	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/v2/internal/api"
+	"github.com/infracost/ci/v2/internal/api/dashboard"
+	"github.com/infracost/ci/v2/internal/api/events"
+	"github.com/infracost/ci/v2/internal/config"
+	"github.com/infracost/ci/v2/internal/git"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/cli/pkg/logging"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	"github.com/infracost/go-proto/pkg/diagnostic"
@@ -344,8 +344,8 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	ctx := context.Background()
 	startTime := time.Now()
 
-	if len(cfg.Auth.AuthenticationToken) == 0 {
-		return fmt.Errorf("authentication token is required: set INFRACOST_CLI_AUTHENTICATION_TOKEN")
+	if err := cfg.RequireAuthToken(); err != nil {
+		return err
 	}
 
 	tokenSource, err := cfg.Auth.Token(ctx)
@@ -501,11 +501,14 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	if postResult.SkipReason != "" {
 		logging.Warnf("comment not posted: %s", postResult.SkipReason)
 	}
+	// Retry sleep is not compute time, and would skew the metric on rate-limited
+	// runs. Read before the save, which has a retry sleep of its own.
+	runSeconds := (time.Since(startTime) - waited).Seconds()
+
 	savePostedComment(ctx, dashboardClient, runID, body, postResult)
 
 	eventsClient := cfg.Events.Client(httpClient)
-	// Retry sleep is not compute time, and would skew the metric on rate-limited runs.
-	trackRun(ctx, eventsClient, headResult, baseResult, (time.Since(startTime) - waited).Seconds(), "comment")
+	trackRun(ctx, eventsClient, headResult, baseResult, runSeconds, "comment")
 	trackDiff(ctx, eventsClient, headResult, baseResult)
 
 	checkBlockingViolations(data, runParams.Guardrails, results)

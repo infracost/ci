@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/infracost/ci/internal/api"
-	"github.com/infracost/ci/internal/api/events"
-	"github.com/infracost/ci/internal/config"
-	"github.com/infracost/ci/internal/git"
-	"github.com/infracost/ci/internal/vcsurl"
+	"github.com/infracost/ci/v2/internal/api"
+	"github.com/infracost/ci/v2/internal/api/events"
+	"github.com/infracost/ci/v2/internal/config"
+	"github.com/infracost/ci/v2/internal/git"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/go-proto/pkg/diagnostic"
 	"github.com/spf13/cobra"
 )
@@ -73,8 +73,8 @@ func scan(cfg *config.Config, args *scanArgs) error {
 		return err
 	}
 
-	if len(cfg.Auth.AuthenticationToken) == 0 {
-		return fmt.Errorf("authentication token is required: set INFRACOST_CLI_AUTHENTICATION_TOKEN")
+	if err := cfg.RequireAuthToken(); err != nil {
+		return err
 	}
 
 	tokenSource, err := cfg.Auth.Token(ctx)
@@ -115,6 +115,13 @@ func scan(cfg *config.Config, args *scanArgs) error {
 		return err
 	}
 
+	// Wall clock would stamp commit + CI queue + scan minutes, which no other
+	// writer of this branch's runs can match. See FIX-739.
+	timeGenerated, err := commitTimeGenerated(cfg.VCS.CommitTimestamp, commit.CommitterTimestamp)
+	if err != nil {
+		return err
+	}
+
 	runOpts := config.RunInputOptions{
 		CommentPosted:     false,
 		Command:           "upload",
@@ -128,6 +135,7 @@ func scan(cfg *config.Config, args *scanArgs) error {
 		CommitAuthorName:  firstNonEmpty(cfg.VCS.CommitAuthorName, commit.AuthorName),
 		CommitAuthorEmail: firstNonEmpty(cfg.VCS.CommitAuthorEmail, commit.AuthorEmail),
 		CommitTimestamp:   timestamp,
+		TimeGenerated:     timeGenerated,
 		Branch:            branch,
 		PipelineRunID:     args.pipelineRunID,
 		UsageAPIEnabled:   runParams.UsageDefaults != nil && len(runParams.UsageDefaults.Resources) > 0,
