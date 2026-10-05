@@ -240,7 +240,7 @@ jobs:
             tar -czf "dist/infracost-scanner_${GOOS}_${GOARCH}.tar.gz" -C bin infracost-scanner
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: infracost-ci_${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/*
@@ -256,7 +256,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: infracost-ci_*
           merge-multiple: true
@@ -473,7 +473,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: infracost-ci_linux_*
           path: artifacts
@@ -493,9 +493,8 @@ jobs:
       # arm64 is emulated rather than built on ubuntu-24.04-arm, which is not
       # available on private-repository plans. Only apk and the plugin install
       # are architecture-specific; the binaries are copied, not compiled.
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to ghcr.io
         env:
           GH_TOKEN: ${{ github.token }}
@@ -557,7 +556,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
 
       # Only needed while the package inherits the repository's private
       # visibility. Drop it with FIX-726, the way the archive verify has no

@@ -107,10 +107,10 @@ github.com/infracost/cli v0.0.14-0.20260807035530-c304cbdee40f h1:CwZ3OdFgX6QlfH
 github.com/infracost/cli v0.0.14-0.20260807035530-c304cbdee40f/go.mod h1:QIBB0J6HuLW+HWgEQjXL6O1E7l2slmMKb7TS8CUIv60=
 github.com/infracost/config v0.18.0 h1:Mmzsku31Y1bPieYlhJomtA+mdSOoHp8dFuFx2SWMBYE=
 github.com/infracost/config v0.18.0/go.mod h1:xy4ha6392BVzM3IyQZxXAqNal8fguAITNuaqwsWmgQI=
-github.com/infracost/go-proto v1.40.0 h1:IoxUswwCC0zgpp1px+hgn1ehIjjoJeKVHy4UT+H/I2I=
-github.com/infracost/go-proto v1.40.0/go.mod h1:jvTShMc5gj6L6yNpX3qCYkez2dCHYuBF0RFGALRJxrA=
-github.com/infracost/proto v1.167.0 h1:gg+sC8Hhm4H/HyBDCmcP4K1MB8l6gEA+Vb0KSDCVpuU=
-github.com/infracost/proto v1.167.0/go.mod h1:Z8vPWBWblwJlw+/ksO+BtsXwf9NiOcSTWx0WRWNbfUA=
+github.com/infracost/go-proto v1.43.0 h1:AK0aUZrL2jsk8LHPPMnLUCENcb24AE9XrR1ah4rDzfc=
+github.com/infracost/go-proto v1.43.0/go.mod h1:K7Vh4JDgicxnL39WUm955nWdDDfOvz8eyMxAuCvg1yk=
+github.com/infracost/proto v1.168.0 h1:RFnC2M/Xo+WIR8Vc2m3hjZCGeRq/16eR43ZxQphwXCg=
+github.com/infracost/proto v1.168.0/go.mod h1:f75TE4fzhCfn6M7jxbtA2oGewScVOIWMJ3HjcnvT094=
 github.com/infracost/vcs v0.10.7 h1:Jui+SqnW/2BUWExBzTDH6ViDomuAtfs59RM9vcr1n1Q=
 github.com/infracost/vcs v0.10.7/go.mod h1:JRD0X7CM0XmZ9uUQsExe39c/+lg7ApgFgmVJuAGd+uo=
 github.com/jhump/protoreflect v1.17.0 h1:qOEr613fac2lOuTgWN4tPAtLL7fUSbuJL5X5XumQh94=

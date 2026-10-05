@@ -185,7 +185,7 @@ jobs:
 
       # Only the Windows archives leave this job. They are the ones nothing
       # else opens, and the zip has to cross runners to be worth extracting.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: matrix.goos == 'windows'
         with:
           name: ci-infracost-ci_${{ matrix.goos }}_${{ matrix.goarch }}
@@ -205,7 +205,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: ci-infracost-ci_windows_*
           merge-multiple: true
