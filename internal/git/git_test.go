@@ -116,3 +116,25 @@ func requireInstant(t *testing.T, want, got string) {
 	require.NoError(t, err, got)
 	require.Equal(t, want, parsed.UTC().Format(time.RFC3339))
 }
+
+// A detached checkout is what most CI platforms leave behind, and rev-parse
+// answers the literal "HEAD" there. CurrentBranch reports "" so a caller can
+// ask for INFRACOST_VCS_BRANCH instead of filing a run under that name.
+func TestCurrentBranch(t *testing.T) {
+	repo := initRepo(t)
+
+	t.Run("named branch", func(t *testing.T) {
+		run(t, repo, "checkout", "-q", "-B", "feature/iops")
+		require.Equal(t, "feature/iops", CurrentBranch(repo))
+	})
+
+	t.Run("detached", func(t *testing.T) {
+		run(t, repo, "checkout", "-q", "--detach", "HEAD")
+		require.Equal(t, "HEAD", RevParse(repo, "--abbrev-ref", "HEAD"), "control: rev-parse names the detached state")
+		require.Empty(t, CurrentBranch(repo))
+	})
+
+	t.Run("not a repository", func(t *testing.T) {
+		require.Empty(t, CurrentBranch(t.TempDir()))
+	})
+}

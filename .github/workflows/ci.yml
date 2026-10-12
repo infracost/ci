@@ -90,6 +90,10 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.10
+          # config verify fetches a schema from golangci-lint.run on every run,
+          # and a timeout there fails the job. The run itself still rejects an
+          # unknown key.
+          verify: false
 
   mocks:
     name: Mocks

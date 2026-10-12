@@ -37,6 +37,11 @@ func setupScanEventsMocks(m *testingconfig.Mocks) *map[string]interface{} {
 func runScan(t *testing.T, cfg *config.Config, path string) error {
 	t.Helper()
 	// scan reads the repo URL from config only, so the fixture must supply it.
+	// The testdata paths are plain directories, not checkouts, so the branch
+	// has to be supplied too.
+	if cfg.VCS.Branch == "" {
+		cfg.VCS.Branch = testBranch
+	}
 	return scan(cfg, &scanArgs{path: path, repoURL: testRepoURL})
 }
 

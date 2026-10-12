@@ -80,13 +80,21 @@ own variables.
 | Branch | `GITHUB_HEAD_REF` | `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` | `BITBUCKET_BRANCH` | `SYSTEM_PULLREQUEST_SOURCEBRANCH` | `CHANGE_BRANCH` |
 | Base branch | `GITHUB_BASE_REF` | `CI_MERGE_REQUEST_TARGET_BRANCH_NAME` | `BITBUCKET_PR_DESTINATION_BRANCH` | `SYSTEM_PULLREQUEST_TARGETBRANCH` | `CHANGE_TARGET` |
 | Pipeline run id | `GITHUB_RUN_ID` | `CI_PIPELINE_ID` | `BITBUCKET_BUILD_NUMBER` | `BUILD_BUILDID` | `BUILD_TAG`, or `BUILD_NUMBER` |
-| Pull request title | event payload | `CI_MERGE_REQUEST_TITLE` | API lookup, needs the comment token | API lookup on Azure Repos, needs the comment token; nothing on a GitHub-backed repo | `CHANGE_TITLE` |
-| Pull request author | event payload | `CI_COMMIT_AUTHOR` (commit author) | API lookup, needs the comment token | `BUILD_REQUESTEDFOR`, replaced by the API lookup on Azure Repos | `CHANGE_AUTHOR` (VCS login) |
+| Pull request title | event payload, else API lookup | `CI_MERGE_REQUEST_TITLE` | API lookup | API lookup | `CHANGE_TITLE` |
+| Pull request author | API lookup | API lookup | API lookup | API lookup | `CHANGE_AUTHOR` (VCS login) |
 | Pull request labels | event payload | `CI_MERGE_REQUEST_LABELS` | — | — | — |
 | **Comment token — yours to set** | `GITHUB_TOKEN` | `GITLAB_TOKEN` | `BITBUCKET_TOKEN` | `SYSTEM_ACCESSTOKEN` or `AZURE_DEVOPS_EXT_PAT`, or `GITHUB_TOKEN` on a GitHub-backed repo | the one matching the provider you set |
 
 *Event payload* is the `pull_request` object in `GITHUB_EVENT_PATH`: Actions has no
 predefined variable for any of those four.
+
+*API lookup* reads the pull request itself, with the comment token already in the
+environment. No platform names the pull request's author in a variable — each offers
+something weaker, such as the commit author or whoever queued the build — so the
+lookup fills the author on all four providers, and the title wherever the platform
+left it empty. It is best effort: without a token, or when the call fails, the run
+keeps whatever the platform gave it and the comment still posts. An author you set
+in `INFRACOST_VCS_PULL_REQUEST_AUTHOR` is never replaced.
 
 † Bitbucket sets that one to an `http://` URL, which keys a second repository on the
 dashboard. The example below overrides it — the one line you still have to copy.
@@ -119,6 +127,9 @@ jobs:
       pull-requests: write
     env:
       INFRACOST_CLI_AUTHENTICATION_TOKEN: ${{ secrets.INFRACOST_CLI_AUTHENTICATION_TOKEN }}
+      # Actions exposes this only as an expression, never as an environment
+      # variable, and diff reads it from the environment.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -204,7 +215,8 @@ line names the binary.
 
 `INFRACOST_CLI_AUTHENTICATION_TOKEN` and `BITBUCKET_TOKEN` both go in secured
 repository variables. `BITBUCKET_TOKEN` is a repository or workspace access token
-with **pull requests: write** scope, or `user:app-password` for Basic auth.
+with **pull requests: write** scope, or an [Atlassian API token](https://id.atlassian.com/manage-profile/security/api-tokens)
+as `email:api-token` for Basic auth. App passwords are retired.
 
 `BITBUCKET_PR_ID` only exists in a `pull-requests:` pipeline, which is why `diff`
 lives there and the branch pipeline runs `scan`.
@@ -263,6 +275,9 @@ jobs:
         # private repository.
         persistCredentials: true
       - script: |
+          # A self-hosted agent reuses the workspace, which still has the last
+          # run's worktrees registered.
+          git worktree prune
           BRANCH="${TARGET_BRANCH#refs/heads/}"
           git fetch origin "$BRANCH"
           git worktree add base "origin/$BRANCH"
@@ -327,9 +342,12 @@ Azure Pipelines building a GitHub repository. The PR lives on GitHub, so the com
 goes through the GitHub API and `SYSTEM_ACCESSTOKEN` is not involved.
 
 ```yaml
-# An absent trigger: builds every push to every branch, and the condition below
-# then skips the job on each one.
-trigger: none
+# The scan job below runs from this trigger. Set it to none and it never
+# fires — only the pr: trigger would queue a build.
+trigger:
+  branches:
+    include:
+      - main
 
 pr:
   branches:
@@ -345,6 +363,9 @@ jobs:
         fetchDepth: 0
         persistCredentials: true
       - script: |
+          # A self-hosted agent reuses the workspace, which still has the last
+          # run's worktrees registered.
+          git worktree prune
           BRANCH="${TARGET_BRANCH#refs/heads/}"
           git fetch origin "$BRANCH"
           git worktree add base "origin/$BRANCH"
@@ -480,7 +501,7 @@ value, or add something the platform does not expose. Everywhere else, set them 
 | `INFRACOST_VCS_REPOSITORY_URL` | Repository **web** URL. Never a clone URL with credentials in it. |
 | `INFRACOST_VCS_PULL_REQUEST_ID` | PR number. On GitLab this is the project-scoped `iid`. |
 | `INFRACOST_VCS_PULL_REQUEST_URL` | Alternative to the ID. Set both and they must agree. |
-| `INFRACOST_VCS_BRANCH`, `INFRACOST_VCS_BASE_BRANCH` | Fall back to the checkout's git metadata. |
+| `INFRACOST_VCS_BRANCH`, `INFRACOST_VCS_BASE_BRANCH` | Fall back to the checkout's branch. Required on a detached checkout, which `scan` and `diff` refuse rather than filing the run under a branch named `HEAD`. |
 | `INFRACOST_VCS_PULL_REQUEST_TITLE`, `INFRACOST_VCS_PULL_REQUEST_AUTHOR`, `INFRACOST_VCS_PULL_REQUEST_LABELS` | Shown on the dashboard run. Labels are comma-separated. |
 | `INFRACOST_VCS_PIPELINE_RUN_ID` | Links the run back to the CI job. |
 | `INFRACOST_CI_DISABLE_DASHBOARD` | Skip uploading results. |
@@ -488,6 +509,12 @@ value, or add something the platform does not expose. Everywhere else, set them 
 | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `BITBUCKET_TOKEN`, `AZURE_DEVOPS_EXT_PAT` or `SYSTEM_ACCESSTOKEN` | Comment token for the provider `diff` is running against. |
 | `INFRACOST_CI_VCS_TLS_CA_CERT_FILE` | PEM bundle trusted in addition to the system pool, for a self-managed VCS behind a private CA. VCS only — the dashboard, pricing and events clients use the system pool. |
 | `INFRACOST_CI_VCS_TLS_INSECURE_SKIP_VERIFY` | Skip VCS certificate verification. The token then travels over an unauthenticated connection — prefer the CA file. Warns when on. |
+
+On a CI platform that checks out a detached commit — Buildkite, Jenkins, TeamCity,
+Woodpecker — there is no branch to read, and `git rev-parse --abbrev-ref HEAD`
+answers the literal `HEAD`. `scan` and `diff` stop there and name
+`INFRACOST_VCS_BRANCH`, rather than uploading a run under a branch of that name,
+which looks successful and never appears under Visibility → Repos.
 
 Commit SHA, message, author and timestamp are read from the head checkout when not
 set explicitly — which is why `git` must be on `PATH`. The container image has it.

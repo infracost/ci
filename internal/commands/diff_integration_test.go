@@ -45,9 +45,11 @@ import (
 )
 
 const (
-	testRepoURL  = "https://github.com/infracost/actions"
-	testPRNumber = 42
-	testRunID    = "test-run-id"
+	testRepoURL    = "https://github.com/infracost/actions"
+	testPRNumber   = 42
+	testRunID      = "test-run-id"
+	testBranch     = "feature"
+	testBaseBranch = "main"
 )
 
 func testdataDir() string {
@@ -172,6 +174,14 @@ func runDiffWithArgs(t *testing.T, cfg *config.Config, m *testingconfig.Mocks, b
 	}
 	if extra.prNumber == 0 {
 		extra.prNumber = testPRNumber
+	}
+	// The testdata paths are plain directories, not checkouts, so the branches
+	// have to be supplied. branch_test.go covers resolving them from git.
+	if cfg.VCS.Branch == "" {
+		cfg.VCS.Branch = testBranch
+	}
+	if cfg.VCS.BaseBranch == "" {
+		cfg.VCS.BaseBranch = testBaseBranch
 	}
 	vcsCtx, err := resolveDiffContext(context.Background(), cfg, &extra)
 	if err != nil {

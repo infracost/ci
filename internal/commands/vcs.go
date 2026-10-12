@@ -65,6 +65,21 @@ func resolvePullRequest(provider, repoURL, prURL string, prNumber int) (string, 
 	return prURL, parsedNumber, nil
 }
 
+// authorIsInferred reports whether the author is still the CI platform's guess
+// rather than the user's value. Every platform infers something weaker than the
+// pull request itself — a display name, a commit author, the literal "github" —
+// so a lookup may replace that, and must never replace an explicit author.
+func authorIsInferred(cfg *config.Config, prAuthor string) bool {
+	return prAuthor == "" ||
+		(cfg.VCSInferences.Filled(config.FieldPullRequestAuthor) && prAuthor == cfg.VCS.PullRequestAuthor)
+}
+
+// needsPullRequestLookup reports whether a title or author is still worth a
+// call. An inferred author counts as missing.
+func needsPullRequestLookup(cfg *config.Config, vcsCtx *diffContext) bool {
+	return vcsCtx.prTitle == "" || authorIsInferred(cfg, vcsCtx.prAuthor)
+}
+
 // resolveOwnerRepo derives the GitHub owner and repository from the repo URL.
 // The flags override the path, not the host: the host decides the API URL.
 func resolveOwnerRepo(repoURL, owner, repo string) (string, string, error) {

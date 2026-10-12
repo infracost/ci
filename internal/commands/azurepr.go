@@ -3,24 +3,18 @@ package commands
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/infracost/ci/v2/internal/config"
 	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/cli/pkg/logging"
 	"github.com/infracost/vcs/pkg/vcs"
 )
-
-// azurePRTimeout bounds the lookup: a cost comment must not wait on metadata.
-const azurePRTimeout = 10 * time.Second
 
 // azureAPIVersion is required on every Azure DevOps REST call. 6.0 is the
 // oldest version the vcs module's comment client sends, so a server that takes
@@ -31,9 +25,6 @@ const azureAPIVersion = "6.0"
 // same rule pkg/vcs/azure uses: a PAT goes in Basic, anything else — the OAuth
 // System.AccessToken — in Bearer.
 const azurePATLength = 52
-
-// azurePRMaxBody bounds the response: two fields are read from it.
-const azurePRMaxBody = 1 << 20
 
 // Azure hint texts. One line each, no menu path: the docs page carries the menu,
 // and a second copy of it would drift when Microsoft renames the settings page.
@@ -62,7 +53,7 @@ func fillAzurePullRequest(ctx context.Context, cfg *config.Config, token string,
 	if vcsCtx.provider != vcsurl.ProviderAzureRepos || vcsCtx.prNumber <= 0 {
 		return
 	}
-	if vcsCtx.prTitle != "" && vcsCtx.prAuthor != "" {
+	if !needsPullRequestLookup(cfg, vcsCtx) {
 		return
 	}
 
@@ -97,9 +88,7 @@ func fillAzurePullRequest(ctx context.Context, cfg *config.Config, token string,
 	}
 	// uniqueName is a handle; BUILD_REQUESTEDFOR, which inference reads, is a
 	// display name. The handle beats that, but never an explicit author.
-	inferredAuthor := vcsCtx.prAuthor == "" ||
-		(cfg.VCSInferences.Filled(config.FieldPullRequestAuthor) && vcsCtx.prAuthor == cfg.VCS.PullRequestAuthor)
-	if pr.CreatedBy.UniqueName != "" && inferredAuthor {
+	if pr.CreatedBy.UniqueName != "" && authorIsInferred(cfg, vcsCtx.prAuthor) {
 		vcsCtx.prAuthor = pr.CreatedBy.UniqueName
 	}
 }
@@ -164,41 +153,12 @@ type azurePullRequest struct {
 
 func fetchAzurePullRequest(ctx context.Context, apiURL, token string, tlsConfig *tls.Config) (azurePullRequest, error) {
 	var pr azurePullRequest
-
-	ctx, cancel := context.WithTimeout(ctx, azurePRTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return pr, err
-	}
-	setAzureAuth(req, token)
-
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = tlsConfig
-	// Do not follow redirects: Go forwards the Authorization header to a
-	// same-host target, and a redirect to http would put the token in clear.
-	client := &http.Client{
-		Transport:     transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-
 	// azurePRURL pins the scheme to https and host-checks the collection URI
 	// before this, which is what the taint analysis cannot see.
-	res, err := client.Do(req) //nolint:gosec // G704
-	if err != nil {
-		return pr, err
-	}
-	defer func() { _ = res.Body.Close() }()
-
-	if res.StatusCode != http.StatusOK {
-		return pr, fmt.Errorf("%s returned %s", apiURL, res.Status)
-	}
-
-	if err := json.NewDecoder(io.LimitReader(res.Body, azurePRMaxBody)).Decode(&pr); err != nil {
-		return pr, err
-	}
-	return pr, nil
+	err := fetchPRJSON(ctx, apiURL, tlsConfig, func(req *http.Request) {
+		setAzureAuth(req, token)
+	}, &pr)
+	return pr, err
 }
 
 // azurePostHint names what to fix when a comment post failed on Azure Repos.

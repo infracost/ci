@@ -63,3 +63,14 @@ func Log(dir, sha, format string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// CurrentBranch returns the checked-out branch name, or "" on a detached
+// checkout. rev-parse answers the literal "HEAD" there, which would otherwise
+// be uploaded as a branch of that name.
+func CurrentBranch(dir string) string {
+	name := RevParse(dir, "--abbrev-ref", "HEAD")
+	if name == "HEAD" {
+		return ""
+	}
+	return name
+}

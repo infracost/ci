@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,9 +18,6 @@ import (
 // web URL is bitbucket.org; the API lives on its own host.
 const bitbucketCloudAPIURL = "https://api.bitbucket.org/2.0"
 
-// bitbucketPRMaxBody bounds the response: three fields are read from it.
-const bitbucketPRMaxBody = 1 << 20
-
 // fillBitbucketPullRequest fills the title and author Bitbucket Pipelines has
 // no predefined variable for, the way fillAzurePullRequest does for Azure.
 //
@@ -32,7 +27,7 @@ func fillBitbucketPullRequest(ctx context.Context, cfg *config.Config, args *dif
 	if vcsCtx.provider != vcsurl.ProviderBitbucket || vcsCtx.prNumber <= 0 {
 		return
 	}
-	if vcsCtx.prTitle != "" && vcsCtx.prAuthor != "" {
+	if !needsPullRequestLookup(cfg, vcsCtx) {
 		return
 	}
 
@@ -62,8 +57,8 @@ func fillBitbucketPullRequest(ctx context.Context, cfg *config.Config, args *dif
 	if vcsCtx.prTitle == "" {
 		vcsCtx.prTitle = pr.Title
 	}
-	if vcsCtx.prAuthor == "" {
-		vcsCtx.prAuthor = pr.authorName()
+	if name := pr.authorName(); name != "" && authorIsInferred(cfg, vcsCtx.prAuthor) {
+		vcsCtx.prAuthor = name
 	}
 }
 
@@ -132,41 +127,12 @@ func (pr bitbucketPullRequest) authorName() string {
 
 func fetchBitbucketPullRequest(ctx context.Context, apiURL, token string, tlsConfig *tls.Config) (bitbucketPullRequest, error) {
 	var pr bitbucketPullRequest
-
-	ctx, cancel := context.WithTimeout(ctx, azurePRTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return pr, err
-	}
-	setBitbucketAuth(req, token)
-
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = tlsConfig
-	// Do not follow redirects: Go forwards the Authorization header to a
-	// same-host target, and a redirect to http would put the token in clear.
-	client := &http.Client{
-		Transport:     transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-
 	// bitbucketPRURL pins the scheme to https and host-checks a Server URL
 	// before this, which is what the taint analysis cannot see.
-	res, err := client.Do(req) //nolint:gosec // G704
-	if err != nil {
-		return pr, err
-	}
-	defer func() { _ = res.Body.Close() }()
-
-	if res.StatusCode != http.StatusOK {
-		return pr, fmt.Errorf("%s returned %s", apiURL, res.Status)
-	}
-
-	if err := json.NewDecoder(io.LimitReader(res.Body, bitbucketPRMaxBody)).Decode(&pr); err != nil {
-		return pr, err
-	}
-	return pr, nil
+	err := fetchPRJSON(ctx, apiURL, tlsConfig, func(req *http.Request) {
+		setBitbucketAuth(req, token)
+	}, &pr)
+	return pr, err
 }
 
 // setBitbucketAuth mirrors pkg/vcs/bitbucket's newClient: a token containing
