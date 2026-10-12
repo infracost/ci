@@ -43,6 +43,9 @@ func TestDiffVCSContext_FlagRepositoryOverridesEnvironment(t *testing.T) {
 	t.Setenv("INFRACOST_VCS_PROVIDER", "github")
 	t.Setenv("INFRACOST_VCS_REPOSITORY_URL", "https://github.com/infracost/old-actions")
 	t.Setenv("INFRACOST_VCS_PULL_REQUEST_ID", "42")
+	// The testdata paths are not checkouts, so the branch has to be supplied.
+	t.Setenv("INFRACOST_VCS_BRANCH", "feature")
+	t.Setenv("INFRACOST_VCS_BASE_BRANCH", "main")
 
 	vcsCtx, err := execDiff(t, "--repo-url", "https://github.com/infracost/actions")
 	require.NoError(t, err)
@@ -127,6 +130,8 @@ func TestDiffVCSContext_FlagPullRequestURLOverridesEnvironment(t *testing.T) {
 	t.Setenv("INFRACOST_VCS_PROVIDER", "github")
 	t.Setenv("INFRACOST_VCS_REPOSITORY_URL", "https://github.com/infracost/actions")
 	t.Setenv("INFRACOST_VCS_PULL_REQUEST_URL", "https://github.com/infracost/actions/pull/7")
+	t.Setenv("INFRACOST_VCS_BRANCH", "feature")
+	t.Setenv("INFRACOST_VCS_BASE_BRANCH", "main")
 
 	vcsCtx, err := execDiff(t, "--pr-url", "https://github.com/infracost/actions/pull/8", "--pr-number", "8")
 	require.NoError(t, err)

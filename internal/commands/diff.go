@@ -167,6 +167,17 @@ func resolveDiffContext(ctx context.Context, cfg *config.Config, args *diffArgs)
 		return diffContext{}, err
 	}
 
+	// Both worktrees are detached on most CI platforms, so a rev-parse
+	// fallback would name both branches "HEAD".
+	branch := firstNonEmpty(cfg.VCS.Branch, git.CurrentBranch(args.headPath))
+	if branch == "" {
+		return diffContext{}, fmt.Errorf("cannot determine the branch: set INFRACOST_VCS_BRANCH. %s is a detached checkout, which many CI platforms make by default", args.headPath)
+	}
+	baseBranch := firstNonEmpty(cfg.VCS.BaseBranch, git.CurrentBranch(args.basePath))
+	if baseBranch == "" {
+		return diffContext{}, fmt.Errorf("cannot determine the base branch: set INFRACOST_VCS_BASE_BRANCH. %s is a detached checkout, which many CI platforms make by default", args.basePath)
+	}
+
 	headSHA := git.RevParse(args.headPath, "HEAD")
 	commit := git.GetCommitInfo(args.headPath, headSHA)
 	timestamp, err := normaliseTimestamp("INFRACOST_VCS_COMMIT_TIMESTAMP", firstNonEmpty(cfg.VCS.CommitTimestamp, commit.Timestamp))
@@ -182,8 +193,8 @@ func resolveDiffContext(ctx context.Context, cfg *config.Config, args *diffArgs)
 		prTitle:    args.prTitle,
 		prAuthor:   args.prAuthor,
 		prLabels:   args.prLabels,
-		branch:     firstNonEmpty(cfg.VCS.Branch, git.RevParse(args.headPath, "--abbrev-ref", "HEAD")),
-		baseBranch: firstNonEmpty(cfg.VCS.BaseBranch, git.RevParse(args.basePath, "--abbrev-ref", "HEAD")),
+		branch:     branch,
+		baseBranch: baseBranch,
 		commitSHA:  firstNonEmpty(cfg.VCS.CommitSHA, headSHA),
 		// No v0.1 name: the base commit is only knowable from the checkout.
 		baseCommitSHA:     git.RevParse(args.basePath, "HEAD"),
@@ -194,10 +205,13 @@ func resolveDiffContext(ctx context.Context, cfg *config.Config, args *diffArgs)
 		pipelineRunID:     args.pipelineRunID,
 	}
 
-	// After the rest: Azure and Bitbucket are the platforms whose title and
-	// author need a call, and each only makes it for the fields still empty.
+	// After the rest: no platform's own variables name the pull request author,
+	// so each provider reads it from the pull request. Every call is a no-op
+	// unless a field is still missing, and each is best effort.
 	fillAzurePullRequest(ctx, cfg, args.azureToken, &vcsCtx)
 	fillBitbucketPullRequest(ctx, cfg, args, &vcsCtx)
+	fillGitHubPullRequest(ctx, cfg, args, &vcsCtx)
+	fillGitLabPullRequest(ctx, cfg, args, &vcsCtx)
 
 	return vcsCtx, nil
 }
