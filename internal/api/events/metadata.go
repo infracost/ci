@@ -8,7 +8,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 
-	"github.com/infracost/cli/version"
+	"github.com/infracost/ci/v2/internal/version"
 )
 
 var metadata map[string]interface{}
@@ -118,7 +118,7 @@ func stripVersion(v string) string {
 }
 
 func getCaller() string {
-	if caller, ok := os.LookupEnv("INFRACOST_CLI_CALLER"); ok {
+	if caller, ok := os.LookupEnv("INFRACOST_CI_CALLER"); ok {
 		// if this has been explicitly set, then use that.
 		return caller
 	}
@@ -150,7 +150,7 @@ func getCaller() string {
 		return "windsurf"
 	}
 
-	return ""
+	return "ci-v2"
 }
 
 func getCIPlatform() string {
