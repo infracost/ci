@@ -252,7 +252,7 @@ const (
 )
 
 type Client interface {
-	RunParameters(ctx context.Context, repoURL, branchName string) (RunParameters, error)
+	RunParameters(ctx context.Context, repoURL, branchName, pullRequestURL string) (RunParameters, error)
 	AddRun(ctx context.Context, input RunInput) (AddRunResult, error)
 	UpdatePullRequestStatus(ctx context.Context, prURL string, status PullRequestStatus) error
 	SavePostedPrComment(ctx context.Context, runID, comment string) (bool, error)
@@ -284,9 +284,9 @@ type client struct {
 	config *Config
 }
 
-func (c *client) RunParameters(ctx context.Context, repoURL, branchName string) (RunParameters, error) {
-	const query = `query RunParameters($repoUrl: String, $branchName: String) {
-  runParameters(repoUrl: $repoUrl, branchName: $branchName) {
+func (c *client) RunParameters(ctx context.Context, repoURL, branchName, pullRequestURL string) (RunParameters, error) {
+	const query = `query RunParameters($repoUrl: String, $branchName: String, $pullRequestUrl: String) {
+  runParameters(repoUrl: $repoUrl, branchName: $branchName, pullRequestUrl: $pullRequestUrl) {
     organizationId
     organizationSlug
     cloudEnabled
@@ -311,6 +311,9 @@ func (c *client) RunParameters(ctx context.Context, repoURL, branchName string) 
 	}
 	if branchName != "" {
 		variables["branchName"] = branchName
+	}
+	if pullRequestURL != "" {
+		variables["pullRequestUrl"] = pullRequestURL
 	}
 
 	r, err := graphql.Query[response](ctx, c.client, fmt.Sprintf("%s/graphql", c.config.Endpoint), query, variables)

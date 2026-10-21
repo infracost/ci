@@ -16,6 +16,7 @@ import (
 	"github.com/infracost/cli/pkg/logging"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	"github.com/infracost/go-proto/pkg/diagnostic"
+	goprotoevent "github.com/infracost/go-proto/pkg/event"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"
 	"github.com/infracost/proto/gen/go/infracost/provider"
 	"github.com/infracost/vcs/pkg/vcs"
@@ -369,7 +370,7 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	httpClient := api.Client(ctx, tokenSource, cfg.OrgID)
 
 	dashboardClient := cfg.Dashboard.Client(httpClient)
-	rawRunParams, err := dashboardClient.RunParameters(ctx, vcsCtx.repoURL, vcsCtx.baseBranch)
+	rawRunParams, err := dashboardClient.RunParameters(ctx, vcsCtx.repoURL, vcsCtx.baseBranch, vcsCtx.prURL)
 	if err != nil {
 		return fmt.Errorf("failed to fetch run parameters: %w", err)
 	}
@@ -438,6 +439,7 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	}
 
 	guardrailResults := pkgscanner.EvaluateGuardrails(runParams.Guardrails, baseResult.Projects, headResult.Projects)
+	unblockedGuardrailIDs := unblockedGuardrailIDs(runParams.Guardrails)
 
 	// Evaluate guardrails against the base branch to determine which were
 	// already triggered before this PR — these are suppressed in the comment.
@@ -451,8 +453,8 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	data := config.BuildCommentData(config.CommentDataOptions{
 		BaseResult:               baseResult,
 		HeadResult:               headResult,
-		GuardrailResults:         guardrailResults,
-		PreviousGuardrailResults: previousGuardrailResults,
+		GuardrailResults:         filterUnblockedGuardrailResults(guardrailResults, unblockedGuardrailIDs),
+		PreviousGuardrailResults: filterUnblockedGuardrailResults(previousGuardrailResults, unblockedGuardrailIDs),
 		BudgetResults:            budgetResults,
 		FinopsPolicySettings:     runParams.FinopsPolicies,
 		UsageAPIEnabled:          usageAPIEnabled,
@@ -527,6 +529,26 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 
 	checkBlockingViolations(data, runParams.Guardrails, results)
 	return nil
+}
+
+func unblockedGuardrailIDs(guardrails []*event.Guardrail) map[string]bool {
+	ids := make(map[string]bool)
+	for _, guardrail := range guardrails {
+		if guardrail.Unblocked {
+			ids[guardrail.Id] = true
+		}
+	}
+	return ids
+}
+
+func filterUnblockedGuardrailResults(results []goprotoevent.GuardrailResult, ids map[string]bool) []goprotoevent.GuardrailResult {
+	filtered := make([]goprotoevent.GuardrailResult, 0, len(results))
+	for _, result := range results {
+		if !ids[result.GuardrailID] {
+			filtered = append(filtered, result)
+		}
+	}
+	return filtered
 }
 
 // savePostedComment records the comment body that is on the pull request.

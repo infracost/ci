@@ -279,13 +279,39 @@ func TestRunParametersRejectedToken(t *testing.T) {
 			}))
 			defer server.Close()
 
-			_, err := newTestClient(server.URL).RunParameters(context.Background(), "https://github.com/org/repo", "main")
+			_, err := newTestClient(server.URL).RunParameters(context.Background(), "https://github.com/org/repo", "main", "")
 
 			require.EqualError(t, err, tt.wantErrMsg)
 			// Reissuing the token is the only thing that clears this.
 			assert.False(t, Retryable(err))
 		})
 	}
+}
+
+func TestRunParametersIncludesPullRequestURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var request struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		require.NoError(t, json.Unmarshal(body, &request))
+		assert.Contains(t, request.Query, "$pullRequestUrl: String")
+		assert.Equal(t, "https://github.com/org/repo/pull/42", request.Variables["pullRequestUrl"])
+
+		_, _ = w.Write([]byte(`{"data":{"runParameters":{}}}`))
+	}))
+	defer server.Close()
+
+	_, err := newTestClient(server.URL).RunParameters(
+		context.Background(),
+		"https://github.com/org/repo",
+		"main",
+		"https://github.com/org/repo/pull/42",
+	)
+	require.NoError(t, err)
 }
 
 // Every call the client makes goes through the same Query, so the mutations get
