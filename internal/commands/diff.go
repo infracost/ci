@@ -16,7 +16,6 @@ import (
 	"github.com/infracost/cli/pkg/logging"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	"github.com/infracost/go-proto/pkg/diagnostic"
-	goprotoevent "github.com/infracost/go-proto/pkg/event"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"
 	"github.com/infracost/proto/gen/go/infracost/provider"
 	"github.com/infracost/vcs/pkg/vcs"
@@ -439,7 +438,6 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	}
 
 	guardrailResults := pkgscanner.EvaluateGuardrails(runParams.Guardrails, baseResult.Projects, headResult.Projects)
-	unblockedGuardrailIDs := unblockedGuardrailIDs(runParams.Guardrails)
 
 	// Evaluate guardrails against the base branch to determine which were
 	// already triggered before this PR — these are suppressed in the comment.
@@ -453,8 +451,8 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	data := config.BuildCommentData(config.CommentDataOptions{
 		BaseResult:               baseResult,
 		HeadResult:               headResult,
-		GuardrailResults:         filterUnblockedGuardrailResults(guardrailResults, unblockedGuardrailIDs),
-		PreviousGuardrailResults: filterUnblockedGuardrailResults(previousGuardrailResults, unblockedGuardrailIDs),
+		GuardrailResults:         guardrailResults,
+		PreviousGuardrailResults: previousGuardrailResults,
 		BudgetResults:            budgetResults,
 		FinopsPolicySettings:     runParams.FinopsPolicies,
 		UsageAPIEnabled:          usageAPIEnabled,
@@ -531,26 +529,6 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	return nil
 }
 
-func unblockedGuardrailIDs(guardrails []*event.Guardrail) map[string]bool {
-	ids := make(map[string]bool)
-	for _, guardrail := range guardrails {
-		if guardrail.Unblocked {
-			ids[guardrail.Id] = true
-		}
-	}
-	return ids
-}
-
-func filterUnblockedGuardrailResults(results []goprotoevent.GuardrailResult, ids map[string]bool) []goprotoevent.GuardrailResult {
-	filtered := make([]goprotoevent.GuardrailResult, 0, len(results))
-	for _, result := range results {
-		if !ids[result.GuardrailID] {
-			filtered = append(filtered, result)
-		}
-	}
-	return filtered
-}
-
 // savePostedComment records the comment body that is on the pull request.
 // The body is what the dashboard reads for posted / not posted, and it is only
 // known after the post, so this is the only place it can be a fact.
@@ -624,9 +602,14 @@ func checkBlockingViolations(data comment.Data, guardrails []*event.Guardrail, r
 	// are eligible for suppression — increase thresholds measure the delta
 	// between base and head, so "already triggered in base" is not meaningful.
 	totalOnly := make(map[string]bool, len(guardrails))
+	// Unblocked guardrails still show in the comment, they just stop blocking.
+	unblocked := make(map[string]bool, len(guardrails))
 	for _, g := range guardrails {
 		if g.TotalThreshold != nil && g.IncreaseThreshold == nil && g.IncreasePercentThreshold == nil {
 			totalOnly[g.Id] = true
+		}
+		if g.Unblocked {
+			unblocked[g.Id] = true
 		}
 	}
 
@@ -638,7 +621,7 @@ func checkBlockingViolations(data comment.Data, guardrails []*event.Guardrail, r
 	}
 
 	for _, gr := range data.GuardrailResults {
-		if gr.Triggered && gr.BlockPR && !previouslyTriggered[gr.GuardrailID] {
+		if gr.Triggered && gr.BlockPR && !previouslyTriggered[gr.GuardrailID] && !unblocked[gr.GuardrailID] {
 			results.BlockPR = true
 			results.Reasons = append(results.Reasons, fmt.Sprintf("guardrail %q triggered", gr.GuardrailName))
 		}

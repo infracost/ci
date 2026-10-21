@@ -571,7 +571,56 @@ func TestDiff_UnblockedGuardrail(t *testing.T) {
 	result, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
 	require.NoError(t, err)
 	assert.False(t, result.BlockPR)
-	assert.Empty(t, data.GuardrailResults)
+	// Still in the comment, just not blocking.
+	require.Len(t, data.GuardrailResults, 1)
+	assert.Equal(t, "gr-unblocked", data.GuardrailResults[0].GuardrailID)
+}
+
+func TestDiff_UnblockedGuardrailWithOtherBlocking(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	unblocked := mustProtoJSON(t, &event.Guardrail{
+		Id:                "gr-unblocked",
+		Name:              "Unblocked limit",
+		Scope:             event.Guardrail_REPO,
+		IncreaseThreshold: ratProto(1),
+		PrComment:         true,
+		BlockPr:           true,
+		Unblocked:         true,
+	})
+	blocking := mustProtoJSON(t, &event.Guardrail{
+		Id:                "gr-blocking",
+		Name:              "Blocking limit",
+		Scope:             event.Guardrail_REPO,
+		IncreaseThreshold: ratProto(1),
+		PrComment:         true,
+		BlockPr:           true,
+	})
+	params := emptyRunParams()
+	params.Guardrails = []json.RawMessage{unblocked, blocking}
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, testRepoURL, testBaseBranch, testPRURL).
+		Return(params, nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.MatchedBy(func(input dashboard.RunInput) bool {
+			return len(input.GuardrailResults) == 2
+		})).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	allowSavePostedComment(m)
+	data := setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	result, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+	assert.True(t, result.BlockPR)
+
+	require.Len(t, data.GuardrailResults, 2)
+	assert.Equal(t, []string{"gr-unblocked", "gr-blocking"}, []string{
+		data.GuardrailResults[0].GuardrailID,
+		data.GuardrailResults[1].GuardrailID,
+	})
 }
 
 func TestDiff_GuardrailSuppressed(t *testing.T) {
