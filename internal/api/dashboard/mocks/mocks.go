@@ -114,8 +114,8 @@ func (_c *MockClient_AddRun_Call) RunAndReturn(run func(ctx context.Context, inp
 }
 
 // RunParameters provides a mock function for the type MockClient
-func (_mock *MockClient) RunParameters(ctx context.Context, repoURL string, branchName string) (dashboard.RunParameters, error) {
-	ret := _mock.Called(ctx, repoURL, branchName)
+func (_mock *MockClient) RunParameters(ctx context.Context, repoURL string, branchName string, pullRequestURL string) (dashboard.RunParameters, error) {
+	ret := _mock.Called(ctx, repoURL, branchName, pullRequestURL)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RunParameters")
@@ -123,16 +123,16 @@ func (_mock *MockClient) RunParameters(ctx context.Context, repoURL string, bran
 
 	var r0 dashboard.RunParameters
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (dashboard.RunParameters, error)); ok {
-		return returnFunc(ctx, repoURL, branchName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (dashboard.RunParameters, error)); ok {
+		return returnFunc(ctx, repoURL, branchName, pullRequestURL)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) dashboard.RunParameters); ok {
-		r0 = returnFunc(ctx, repoURL, branchName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) dashboard.RunParameters); ok {
+		r0 = returnFunc(ctx, repoURL, branchName, pullRequestURL)
 	} else {
 		r0 = ret.Get(0).(dashboard.RunParameters)
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
-		r1 = returnFunc(ctx, repoURL, branchName)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
+		r1 = returnFunc(ctx, repoURL, branchName, pullRequestURL)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -148,11 +148,12 @@ type MockClient_RunParameters_Call struct {
 //   - ctx context.Context
 //   - repoURL string
 //   - branchName string
-func (_e *MockClient_Expecter) RunParameters(ctx any, repoURL any, branchName any) *MockClient_RunParameters_Call {
-	return &MockClient_RunParameters_Call{Call: _e.mock.On("RunParameters", ctx, repoURL, branchName)}
+//   - pullRequestURL string
+func (_e *MockClient_Expecter) RunParameters(ctx any, repoURL any, branchName any, pullRequestURL any) *MockClient_RunParameters_Call {
+	return &MockClient_RunParameters_Call{Call: _e.mock.On("RunParameters", ctx, repoURL, branchName, pullRequestURL)}
 }
 
-func (_c *MockClient_RunParameters_Call) Run(run func(ctx context.Context, repoURL string, branchName string)) *MockClient_RunParameters_Call {
+func (_c *MockClient_RunParameters_Call) Run(run func(ctx context.Context, repoURL string, branchName string, pullRequestURL string)) *MockClient_RunParameters_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -166,10 +167,15 @@ func (_c *MockClient_RunParameters_Call) Run(run func(ctx context.Context, repoU
 		if args[2] != nil {
 			arg2 = args[2].(string)
 		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
@@ -180,7 +186,7 @@ func (_c *MockClient_RunParameters_Call) Return(runParameters dashboard.RunParam
 	return _c
 }
 
-func (_c *MockClient_RunParameters_Call) RunAndReturn(run func(ctx context.Context, repoURL string, branchName string) (dashboard.RunParameters, error)) *MockClient_RunParameters_Call {
+func (_c *MockClient_RunParameters_Call) RunAndReturn(run func(ctx context.Context, repoURL string, branchName string, pullRequestURL string) (dashboard.RunParameters, error)) *MockClient_RunParameters_Call {
 	_c.Call.Return(run)
 	return _c
 }

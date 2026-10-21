@@ -369,7 +369,7 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	httpClient := api.Client(ctx, tokenSource, cfg.OrgID)
 
 	dashboardClient := cfg.Dashboard.Client(httpClient)
-	rawRunParams, err := dashboardClient.RunParameters(ctx, vcsCtx.repoURL, vcsCtx.baseBranch)
+	rawRunParams, err := dashboardClient.RunParameters(ctx, vcsCtx.repoURL, vcsCtx.baseBranch, vcsCtx.prURL)
 	if err != nil {
 		return fmt.Errorf("failed to fetch run parameters: %w", err)
 	}
@@ -602,9 +602,14 @@ func checkBlockingViolations(data comment.Data, guardrails []*event.Guardrail, r
 	// are eligible for suppression — increase thresholds measure the delta
 	// between base and head, so "already triggered in base" is not meaningful.
 	totalOnly := make(map[string]bool, len(guardrails))
+	// Unblocked guardrails still show in the comment, they just stop blocking.
+	unblocked := make(map[string]bool, len(guardrails))
 	for _, g := range guardrails {
 		if g.TotalThreshold != nil && g.IncreaseThreshold == nil && g.IncreasePercentThreshold == nil {
 			totalOnly[g.Id] = true
+		}
+		if g.Unblocked {
+			unblocked[g.Id] = true
 		}
 	}
 
@@ -616,7 +621,7 @@ func checkBlockingViolations(data comment.Data, guardrails []*event.Guardrail, r
 	}
 
 	for _, gr := range data.GuardrailResults {
-		if gr.Triggered && gr.BlockPR && !previouslyTriggered[gr.GuardrailID] {
+		if gr.Triggered && gr.BlockPR && !previouslyTriggered[gr.GuardrailID] && !unblocked[gr.GuardrailID] {
 			results.BlockPR = true
 			results.Reasons = append(results.Reasons, fmt.Sprintf("guardrail %q triggered", gr.GuardrailName))
 		}

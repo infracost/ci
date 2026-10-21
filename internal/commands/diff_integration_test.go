@@ -46,6 +46,7 @@ import (
 
 const (
 	testRepoURL    = "https://github.com/infracost/actions"
+	testPRURL      = "https://github.com/infracost/actions/pull/42"
 	testPRNumber   = 42
 	testRunID      = "test-run-id"
 	testBranch     = "feature"
@@ -207,7 +208,7 @@ func TestDiff_BasicCostDiff(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	setupDashboardAddRun(m)
@@ -251,7 +252,7 @@ func TestDiff_NoChanges(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	setupDashboardAddRun(m)
@@ -279,7 +280,7 @@ func TestDiff_DashboardError(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(dashboard.RunParameters{}, errors.New("dashboard unavailable"))
 
 	_, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
@@ -293,7 +294,7 @@ func TestDiff_ScanFailureUploadsErrorRun(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	// When scanning fails, an error run should be uploaded to the dashboard.
@@ -315,7 +316,7 @@ func TestDiff_ScanFailureDashboardDisabled(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	// AddRun should NOT be called when dashboard is disabled, even on error.
@@ -333,7 +334,7 @@ func TestDiff_RetriedPostIsNotRunTime(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	setupDashboardAddRun(m)
@@ -363,7 +364,7 @@ func TestDiff_UploadFailureStillPostsComment(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
@@ -389,7 +390,7 @@ func TestDiff_PostedCommentIsSaved(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.MatchedBy(func(input dashboard.RunInput) bool {
@@ -417,7 +418,7 @@ func TestDiff_IdenticalCommentIsSaved(t *testing.T) {
 	postedAt := time.Now()
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
@@ -449,7 +450,7 @@ func TestDiff_NewerCommentIsNotSaved(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
@@ -473,7 +474,7 @@ func TestDiff_FailedPostIsNotSaved(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
@@ -508,7 +509,7 @@ func TestDiff_GuardrailTriggered(t *testing.T) {
 	params.Guardrails = []json.RawMessage{guardrail}
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(params, nil)
 
 	setupDashboardAddRun(m)
@@ -539,6 +540,89 @@ func TestDiff_GuardrailTriggered(t *testing.T) {
 	}
 }
 
+func TestDiff_UnblockedGuardrail(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	guardrail := mustProtoJSON(t, &event.Guardrail{
+		Id:                "gr-unblocked",
+		Name:              "Cost increase limit",
+		Scope:             event.Guardrail_REPO,
+		IncreaseThreshold: ratProto(1),
+		PrComment:         true,
+		BlockPr:           true,
+		Unblocked:         true,
+	})
+	params := emptyRunParams()
+	params.Guardrails = []json.RawMessage{guardrail}
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, testRepoURL, testBaseBranch, testPRURL).
+		Return(params, nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.MatchedBy(func(input dashboard.RunInput) bool {
+			return len(input.GuardrailResults) == 1 && input.GuardrailResults[0].Triggered && input.GuardrailResults[0].BlockPR
+		})).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	allowSavePostedComment(m)
+	data := setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	result, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+	assert.False(t, result.BlockPR)
+	// Still in the comment, just not blocking.
+	require.Len(t, data.GuardrailResults, 1)
+	assert.Equal(t, "gr-unblocked", data.GuardrailResults[0].GuardrailID)
+}
+
+func TestDiff_UnblockedGuardrailWithOtherBlocking(t *testing.T) {
+	cfg, m := testingconfig.Config(t)
+	processPlugins(cfg)
+
+	unblocked := mustProtoJSON(t, &event.Guardrail{
+		Id:                "gr-unblocked",
+		Name:              "Unblocked limit",
+		Scope:             event.Guardrail_REPO,
+		IncreaseThreshold: ratProto(1),
+		PrComment:         true,
+		BlockPr:           true,
+		Unblocked:         true,
+	})
+	blocking := mustProtoJSON(t, &event.Guardrail{
+		Id:                "gr-blocking",
+		Name:              "Blocking limit",
+		Scope:             event.Guardrail_REPO,
+		IncreaseThreshold: ratProto(1),
+		PrComment:         true,
+		BlockPr:           true,
+	})
+	params := emptyRunParams()
+	params.Guardrails = []json.RawMessage{unblocked, blocking}
+
+	m.Dashboard.EXPECT().
+		RunParameters(mock.Anything, testRepoURL, testBaseBranch, testPRURL).
+		Return(params, nil)
+	m.Dashboard.EXPECT().
+		AddRun(mock.Anything, mock.MatchedBy(func(input dashboard.RunInput) bool {
+			return len(input.GuardrailResults) == 2
+		})).
+		Return(dashboard.AddRunResult{ID: testRunID}, nil)
+	allowSavePostedComment(m)
+	data := setupVCSMocks(m)
+	setupEventsMocks(m)
+
+	result, err := runDiff(t, cfg, m, filepath.Join(testdataDir(), "basic", "base"), filepath.Join(testdataDir(), "basic", "head"))
+	require.NoError(t, err)
+	assert.True(t, result.BlockPR)
+
+	require.Len(t, data.GuardrailResults, 2)
+	assert.Equal(t, []string{"gr-unblocked", "gr-blocking"}, []string{
+		data.GuardrailResults[0].GuardrailID,
+		data.GuardrailResults[1].GuardrailID,
+	})
+}
+
 func TestDiff_GuardrailSuppressed(t *testing.T) {
 	cfg, m := testingconfig.Config(t)
 	processPlugins(cfg)
@@ -556,7 +640,7 @@ func TestDiff_GuardrailSuppressed(t *testing.T) {
 	params.Guardrails = []json.RawMessage{guardrail}
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(params, nil)
 
 	setupDashboardAddRun(m)
@@ -603,7 +687,7 @@ func TestDiff_FinOpsPolicy(t *testing.T) {
 	params.FinopsPolicies = []json.RawMessage{finopsPolicy, securityPolicy}
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(params, nil)
 
 	setupDashboardAddRun(m)
@@ -642,7 +726,7 @@ func TestDiff_UsageDefaults(t *testing.T) {
 	params.UsageDefaults = usageDefaults
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(params, nil)
 
 	setupDashboardAddRun(m)
@@ -664,7 +748,7 @@ func TestDiff_SingleProjectFilter(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	setupDashboardAddRun(m)
@@ -693,7 +777,7 @@ func TestDiff_VCSProviderFromConfig(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	var metadata map[string]interface{}
@@ -974,7 +1058,7 @@ func TestDiff_SaveIsRetriedOnServerError(t *testing.T) {
 	noRetryDelay(t)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
@@ -1002,7 +1086,7 @@ func TestDiff_RetriedSaveIsNotRunTime(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
@@ -1036,7 +1120,7 @@ func TestDiff_SaveIsNotRetriedOnClientError(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
@@ -1061,7 +1145,7 @@ func TestDiff_SaveGivesUpAfterSecondServerError(t *testing.T) {
 	noRetryDelay(t)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).
@@ -1104,7 +1188,7 @@ func TestDiff_CommentOutFileIsNotSaved(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "comment.md")
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.MatchedBy(func(input dashboard.RunInput) bool {
@@ -1183,7 +1267,7 @@ func TestDiff_AzureWriteForbiddenNamesThePermission(t *testing.T) {
 	logs := captureWarnings(t, cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	m.Dashboard.EXPECT().
 		AddRun(mock.Anything, mock.Anything).

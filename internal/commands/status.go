@@ -94,7 +94,7 @@ func updatePullRequestStatus(cfg *config.Config, prURL, repoURL string, status d
 		return nil
 	}
 
-	runParams, err := dashboardClient.RunParameters(ctx, repoURL, "")
+	runParams, err := dashboardClient.RunParameters(ctx, repoURL, "", "")
 	if err != nil {
 		return fmt.Errorf("failed to fetch run parameters: %w", err)
 	}

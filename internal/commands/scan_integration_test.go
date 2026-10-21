@@ -50,7 +50,7 @@ func TestScan_BasicUpload(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	runEvent := setupScanEventsMocks(m)
@@ -103,7 +103,7 @@ func TestScan_DashboardDisabled(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	// AddRun should NOT be called when dashboard is disabled.
@@ -120,7 +120,7 @@ func TestScan_ScanFailureUploadsErrorRun(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	m.Dashboard.EXPECT().
@@ -141,7 +141,7 @@ func TestScan_ScanFailureDashboardDisabled(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	// AddRun should NOT be called when dashboard is disabled, even on error.
@@ -157,7 +157,7 @@ func TestScan_DashboardError(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	m.Dashboard.EXPECT().
@@ -177,7 +177,7 @@ func TestScan_VCSProviderFromConfig(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 
 	setupScanEventsMocks(m)
@@ -241,7 +241,7 @@ func TestScan_TimeGeneratedIsTheCommitterDate(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	setupScanEventsMocks(m)
 
@@ -268,7 +268,7 @@ func TestScan_TimeGeneratedHonoursTheCommitTimestampOverride(t *testing.T) {
 	processPlugins(cfg)
 
 	m.Dashboard.EXPECT().
-		RunParameters(mock.Anything, mock.Anything, mock.Anything).
+		RunParameters(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(emptyRunParams(), nil)
 	setupScanEventsMocks(m)
 

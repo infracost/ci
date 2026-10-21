@@ -88,7 +88,7 @@ func scan(cfg *config.Config, args *scanArgs) error {
 	if branch == "" {
 		return fmt.Errorf("cannot determine the branch: set INFRACOST_VCS_BRANCH. %s is a detached checkout, which many CI platforms make by default", args.path)
 	}
-	rawRunParams, err := dashboardClient.RunParameters(ctx, args.repoURL, branch)
+	rawRunParams, err := dashboardClient.RunParameters(ctx, args.repoURL, branch, "")
 	if err != nil {
 		return fmt.Errorf("failed to fetch run parameters: %w", err)
 	}
