@@ -68,26 +68,35 @@ jobs:
           # The label is what image-verify proved the image contains, so it is
           # the shipped set without re-listing it.
           docker inspect --format '{{ index .Config.Labels "io.infracost.plugins" }}' "$REF" |
-            jq -S 'map({key, version}) | sort' > shipped.json
+            jq -S 'map({key, type, version}) | sort' > shipped.json
 
           # plugins install calls UpdatePlugins, which resolves latest whatever
           # AUTO_UPDATE says. A cache dir outside /opt leaves the baked set alone.
           docker run --rm -e INFRACOST_CLI_PLUGIN_CACHE_DIRECTORY=/tmp/plugins "$REF" \
             sh -c 'if command -v infracost-ci > /dev/null; then infracost-ci plugins install > /dev/null && infracost-ci plugins list --format json; else scanner plugins install > /dev/null && scanner plugins list --format json; fi' |
-            jq -S 'map({key, version}) | sort' > current.json
+            jq -S 'map({key, type, version}) | sort' > current.json
 
           # diff is symmetric, so a yanked release resolving latest backwards
           # would otherwise cut a release that downgrades the shipped set.
+          # Plugins are not pinned, so any release would ship the downgrade:
+          # warn and skip rather than fail the run.
+          DOWNGRADED=false
           while read -r KEY OLD NEW; do
             if [ "$(printf '%s\n%s\n' "$OLD" "$NEW" | sort -V | tail -1)" != "$NEW" ]; then
-              echo "$KEY resolves latest to $NEW, older than the shipped $OLD."
-              exit 1
+              echo "::warning::$KEY resolves latest to $NEW, older than the shipped $OLD. Not releasing."
+              DOWNGRADED=true
             fi
           done < <(jq -n -r --slurpfile old shipped.json --slurpfile new current.json '
-            ($old[0] | INDEX(.key)) as $o
+            ($old[0] | INDEX("\(.key)/\(.type)")) as $o
             | $new[0][]
-            | select($o[.key] and $o[.key].version != .version)
-            | "\(.key) \($o[.key].version) \(.version)"')
+            | "\(.key)/\(.type)" as $k
+            | select($o[$k] and $o[$k].version != .version)
+            | "\($k) \($o[$k].version) \(.version)"')
+
+          if [ "$DOWNGRADED" = true ]; then
+            echo "CHANGED=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if diff -u shipped.json current.json; then
             echo "Plugins are unchanged."
