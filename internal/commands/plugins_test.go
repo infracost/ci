@@ -108,8 +108,8 @@ func TestCheckRequiredPlugins(t *testing.T) {
 	}
 }
 
-// Without parsers nothing identifies a project, and a zero-project directory
-// has to fail rather than print an empty table.
+// Without parsers nothing can identify a project, so detect has to fail rather
+// than print an empty table.
 //
 // INFRACOST_CLI_PLUGIN_DIR, not the cache directory: detect calls EnsurePlugins,
 // and only the developer-override directory sets SkipInstall. Pointed at the
@@ -121,9 +121,9 @@ func TestPluginsDetect_NoProjectsIsAFailure(t *testing.T) {
 
 	_, err := execPlugins(t, "detect", "--path", filepath.Join(testdataDir(), "basic", "head"))
 	require.Error(t, err)
-	// detect can also fail in EnsurePlugins or LoadOrGenerateRepositoryConfig,
-	// and a bare Error assertion would stay green on either.
-	require.Contains(t, err.Error(), "no projects found")
+	// detect can also fail in EnsurePlugins, and a bare Error assertion would
+	// stay green on that.
+	require.Contains(t, err.Error(), "no parser plugins found")
 
 	entries, readErr := os.ReadDir(dir)
 	require.NoError(t, readErr)
