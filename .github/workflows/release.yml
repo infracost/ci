@@ -664,7 +664,7 @@ jobs:
         with:
           username: infracost          # must be the org name, not a user
         env:
-          DOCKERHUB_OIDC_CONNECTIONID: {{ secret.DOCKER_CONNECTION_ID }}
+          DOCKERHUB_OIDC_CONNECTIONID: {{ var.DOCKERHUB_OIDC_CONNECTION_ID }}
 
       # The first tag either registry gets, and the first thing Docker Hub sees
       # at all. image pushed by digest only, so until this step there is nothing
