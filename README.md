@@ -539,6 +539,9 @@ the exact version is immutable; pin by digest to pin the bytes:
 docker run --rm ghcr.io/infracost/ci@sha256:... --version
 ```
 
+The same image is mirrored to Docker Hub as `infracost/ci`, with the same tags and
+the same digest, for anyone who cannot pull from `ghcr.io`.
+
 Each release publishes the manifest-list digest as `image-digest.txt`, and
 `docker inspect` reports the plugin versions baked in under the `io.infracost.plugins`
 label.
@@ -669,7 +672,8 @@ git push --delete origin v2.0.0
 Pushing a `v*.*.*` tag builds six platforms, attaches `checksums.txt`, publishes the
 release, and pushes `ghcr.io/infracost/ci` for `linux/amd64` and `linux/arm64`. The
 image is only tagged once the archives and the image have both been verified, so a
-rolled-back release leaves nothing behind.
+rolled-back release leaves nothing behind. Tagging also copies that digest to
+`docker.io/infracost/ci`, so Docker Hub sees nothing until every gate has passed.
 
 ## License
 

@@ -650,23 +650,37 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
     steps:
+      - uses: docker/setup-buildx-action@v4
+
       - name: Log in to ghcr.io
         env:
           GH_TOKEN: ${{ github.token }}
         run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      # The first tag the package gets. image pushed by digest only, so until
-      # this step there is nothing for a pull to resolve — which is what keeps
-      # a rolled-back release from leaving a usable :VERSION behind.
+      # Docker Hub is a mirror, fed from the verified GHCR digest rather than a
+      # second build, so both registries serve identical bytes under one digest.
+      - uses: docker/login-action@v4   # needs v4.5.0+
+        with:
+          username: infracost          # must be the org name, not a user
+        env:
+          DOCKERHUB_OIDC_CONNECTIONID: {{ var.DOCKERHUB_OIDC_CONNECTION_ID }}
+
+      # The first tag either registry gets, and the first thing Docker Hub sees
+      # at all. image pushed by digest only, so until this step there is nothing
+      # for a pull to resolve — which is what keeps a rolled-back release from
+      # leaving a usable :VERSION behind.
       - name: Apply the version tag
         env:
           IMAGE: ghcr.io/${{ github.repository }}
+          HUB_IMAGE: docker.io/${{ github.repository }}
           VERSION: ${{ needs.version.outputs.version }}
           DIGEST: ${{ needs.image.outputs.digest }}
         run: |
           docker buildx imagetools create \
             --tag "${IMAGE}:${VERSION}" \
+            --tag "${HUB_IMAGE}:${VERSION}" \
             "${IMAGE}@${DIGEST}"
 
       # latest, the major tag and the minor tag are what every install recipe points
@@ -676,6 +690,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ghcr.io/${{ github.repository }}
+          HUB_IMAGE: docker.io/${{ github.repository }}
           VERSION: ${{ needs.version.outputs.version }}
           TAG: v${{ needs.version.outputs.version }}
           REPOSITORY: ${{ github.repository }}
@@ -695,6 +710,9 @@ jobs:
             --tag "${IMAGE}:${VERSION%%.*}" \
             --tag "${IMAGE}:${VERSION%.*}" \
             --tag "${IMAGE}:latest" \
+            --tag "${HUB_IMAGE}:${VERSION%%.*}" \
+            --tag "${HUB_IMAGE}:${VERSION%.*}" \
+            --tag "${HUB_IMAGE}:latest" \
             "${IMAGE}@${DIGEST}"
 
       # checksums.txt hashes the tarballs and says nothing about the image, so
