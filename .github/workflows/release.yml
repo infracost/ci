@@ -660,10 +660,11 @@ jobs:
 
       # Docker Hub is a mirror, fed from the verified GHCR digest rather than a
       # second build, so both registries serve identical bytes under one digest.
-      - name: Log in to Docker Hub
+      - uses: docker/login-action@v4   # needs v4.5.0+
+        with:
+          username: infracost          # must be the org name, not a user
         env:
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          DOCKERHUB_OIDC_CONNECTIONID: {{ secret.DOCKER_CONNECTION_ID }}
 
       # The first tag either registry gets, and the first thing Docker Hub sees
       # at all. image pushed by digest only, so until this step there is nothing
