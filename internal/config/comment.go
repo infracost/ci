@@ -1,6 +1,8 @@
 package config
 
 import (
+	"unicode/utf8"
+
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	goprotoevent "github.com/infracost/go-proto/pkg/event"
 	"github.com/infracost/go-proto/pkg/rat"
@@ -8,6 +10,28 @@ import (
 	"github.com/infracost/proto/gen/go/infracost/provider"
 	"github.com/infracost/vcs/pkg/vcs/comment"
 )
+
+// maxRunQuotaMessageLen bounds the pricing endpoint's message, which becomes
+// the whole comment body. GitHub rejects bodies over 65536 characters.
+const maxRunQuotaMessageLen = 4096
+
+// truncateRunQuotaMessage cuts on a rune boundary: a byte cut would split a
+// multi-byte character and leave invalid UTF-8.
+func truncateRunQuotaMessage(msg string) string {
+	if len(msg) <= maxRunQuotaMessageLen {
+		return msg
+	}
+	cut := maxRunQuotaMessageLen
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	// No boundary at all means the message is not UTF-8. Cut flat rather than
+	// return the ellipsis alone, which would explain nothing.
+	if cut == 0 {
+		cut = maxRunQuotaMessageLen
+	}
+	return msg[:cut] + "…"
+}
 
 // CommentDataOptions contains the parameters needed to build a PR comment.
 type CommentDataOptions struct {
@@ -131,8 +155,16 @@ func BuildCommentData(opts CommentDataOptions) comment.Data {
 	finopsPolicies, securityPolicies := splitPolicyResults(allFinops, policyGroupBySlug)
 	prevFinopsPolicies, prevSecurityPolicies := splitPolicyResults(allPrevFinops, policyGroupBySlug)
 
+	// The head scan is what this PR is reporting on, so its limit message wins.
+	runQuotaMessage := headResult.RunQuotaMessage
+	if runQuotaMessage == "" {
+		runQuotaMessage = baseResult.RunQuotaMessage
+	}
+	runQuotaMessage = truncateRunQuotaMessage(runQuotaMessage)
+
 	return comment.Data{
 		EnableEnvironmentalMetrics:      true,
+		RunQuotaMessage:                 runQuotaMessage,
 		UsedUsageFile:                   headResult.EstimatedUsageCounts != nil,
 		UsageAPIEnabled:                 opts.UsageAPIEnabled,
 		OrgSlug:                         opts.OrgSlug,

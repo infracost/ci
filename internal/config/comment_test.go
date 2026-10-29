@@ -1,7 +1,9 @@
 package config
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	goprotoevent "github.com/infracost/go-proto/pkg/event"
@@ -872,6 +874,66 @@ func TestBuildCommentData(t *testing.T) {
 		}
 		if data.GuardrailResults[0].GuardrailID != "g1" {
 			t.Errorf("expected g1, got %q", data.GuardrailResults[0].GuardrailID)
+		}
+	})
+
+	t.Run("run quota message", func(t *testing.T) {
+		msg := "Infracost free monthly run limit exceeded. Please contact hello@infracost.io to purchase usage pack."
+
+		data := BuildCommentData(CommentDataOptions{
+			BaseResult: &DirectoryResult{},
+			HeadResult: &DirectoryResult{RunQuotaMessage: msg},
+			Currency:   "USD",
+			Branch:     "main",
+		})
+		if data.RunQuotaMessage != msg {
+			t.Errorf("RunQuotaMessage = %q, want %q", data.RunQuotaMessage, msg)
+		}
+
+		// The base scan hits the same org-wide limit first, so its message has to
+		// carry when the head scan never got far enough to see one.
+		data = BuildCommentData(CommentDataOptions{
+			BaseResult: &DirectoryResult{RunQuotaMessage: msg},
+			HeadResult: &DirectoryResult{},
+			Currency:   "USD",
+			Branch:     "main",
+		})
+		if data.RunQuotaMessage != msg {
+			t.Errorf("RunQuotaMessage from base = %q, want %q", data.RunQuotaMessage, msg)
+		}
+	})
+}
+
+func TestTruncateRunQuotaMessage(t *testing.T) {
+	t.Run("short message is unchanged", func(t *testing.T) {
+		msg := "Run limit reached"
+		if got := truncateRunQuotaMessage(msg); got != msg {
+			t.Errorf("got %q, want %q", got, msg)
+		}
+	})
+
+	t.Run("long message is cut on a rune boundary", func(t *testing.T) {
+		// "é" is two bytes and straddles the limit, so the cut has to walk back.
+		msg := strings.Repeat("a", maxRunQuotaMessageLen-1) + strings.Repeat("é", 10)
+		got := truncateRunQuotaMessage(msg)
+
+		if !utf8.ValidString(got) {
+			t.Errorf("got invalid UTF-8: %q", got[len(got)-10:])
+		}
+		if !strings.HasSuffix(got, "…") {
+			t.Errorf("got %q, want an ellipsis suffix", got[len(got)-10:])
+		}
+		if want := maxRunQuotaMessageLen - 1 + len("…"); len(got) != want {
+			t.Errorf("len = %d, want %d", len(got), want)
+		}
+	})
+
+	t.Run("invalid UTF-8 keeps the message", func(t *testing.T) {
+		msg := strings.Repeat("\x80", maxRunQuotaMessageLen+100)
+		got := truncateRunQuotaMessage(msg)
+
+		if want := maxRunQuotaMessageLen + len("…"); len(got) != want {
+			t.Errorf("len = %d, want %d", len(got), want)
 		}
 	})
 }

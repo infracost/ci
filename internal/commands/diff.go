@@ -525,8 +525,31 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	trackRun(ctx, eventsClient, headResult, baseResult, runSeconds, "comment")
 	trackDiff(ctx, eventsClient, headResult, baseResult)
 
+	// A quota failure leaves projects with no cost, so a blocking guardrail or
+	// policy was judged on missing data and cannot be treated as passing.
+	if data.RunQuotaMessage != "" && hasBlockingRules(runParams) {
+		results.BlockPR = true
+		results.Reasons = append(results.Reasons, "the run limit was reached, so guardrails and policies could not be evaluated")
+	}
+
 	checkBlockingViolations(data, runParams.Guardrails, results)
 	return nil
+}
+
+// hasBlockingRules reports whether the org has a guardrail or FinOps policy
+// configured to block pull requests.
+func hasBlockingRules(runParams *config.ParsedRunParameters) bool {
+	for _, g := range runParams.Guardrails {
+		if g.BlockPr && !g.Unblocked {
+			return true
+		}
+	}
+	for _, p := range runParams.FinopsPolicies {
+		if p.BlockPr {
+			return true
+		}
+	}
+	return false
 }
 
 // savePostedComment records the comment body that is on the pull request.

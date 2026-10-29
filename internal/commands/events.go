@@ -115,6 +115,11 @@ func trackDiff(ctx context.Context, client events.Client, head *config.Directory
 
 	for i := range head.Projects {
 		p := &head.Projects[i]
+		// A quota-failed project has no results, so every base violation would
+		// look fixed.
+		if head.QuotaFailedProjects[p.Name] {
+			continue
+		}
 		old, ok := prev[p.Name]
 		if !ok {
 			continue
