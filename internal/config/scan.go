@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,6 +38,12 @@ type DirectoryResult struct {
 	HasConfigFile          bool
 	UsageFilePath          string
 	ConfigFileHasUsageFile bool
+
+	// RunQuotaMessage is the pricing API's run-limit message, set when the org
+	// exceeded its monthly run limit. Projects named in QuotaFailedProjects have
+	// no cost data for that reason.
+	RunQuotaMessage     string
+	QuotaFailedProjects map[string]bool
 }
 
 // ParsedRunParameters holds the unmarshalled run parameters from the dashboard API.
@@ -167,34 +174,55 @@ func (config *Config) ScanDirectory(ctx context.Context, dir string, accessToken
 	}
 
 	var projects []pkgscanner.ProjectResult
+	var runQuotaMessage string
+	quotaFailedProjects := map[string]bool{}
 	for _, project := range repoConfig.Projects {
 		if projectFilter != "" && project.Name != projectFilter {
 			continue
 		}
 
-		result, err := pkgscanner.ScanProject(ctx, &pkgscanner.ScanProjectOptions{
-			RootDir:                   absoluteDir,
-			CacheDir:                  cacheDir,
-			RepoConfig:                repoConfig,
-			Project:                   project,
-			AccessToken:               accessToken,
-			BranchName:                branch,
-			RepositoryName:            runParams.RepositoryName,
-			OrgID:                     runParams.OrganizationID,
-			PricingEndpoint:           config.PricingEndpoint,
-			Currency:                  repoConfig.Currency,
-			TraceID:                   trace.ID,
-			ProductionFilters:         runParams.ProductionFilters,
-			FinopsPolicies:            runParams.FinopsPolicies,
-			TagPolicies:               runParams.TagPolicies,
-			UsageDefaults:             runParams.UsageDefaults,
-			RepoUsage:                 repoUsage,
-			PreviousResourceAddresses: previousAddresses[project.Name],
-			Plugins:                   &config.Plugins,
-			Logging:                   config.Logging,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan project %q: %w", project.Name, err)
+		// Once the limit is hit nothing else is scanned: it is org-wide, so the
+		// rest would only repeat the plan and the rejected pricing call.
+		var result *pkgscanner.ProjectResult
+		if runQuotaMessage == "" {
+			var err error
+			result, err = pkgscanner.ScanProject(ctx, &pkgscanner.ScanProjectOptions{
+				RootDir:                   absoluteDir,
+				CacheDir:                  cacheDir,
+				RepoConfig:                repoConfig,
+				Project:                   project,
+				AccessToken:               accessToken,
+				BranchName:                branch,
+				RepositoryName:            runParams.RepositoryName,
+				OrgID:                     runParams.OrganizationID,
+				PricingEndpoint:           config.PricingEndpoint,
+				Currency:                  repoConfig.Currency,
+				TraceID:                   trace.ID,
+				ProductionFilters:         runParams.ProductionFilters,
+				FinopsPolicies:            runParams.FinopsPolicies,
+				TagPolicies:               runParams.TagPolicies,
+				UsageDefaults:             runParams.UsageDefaults,
+				RepoUsage:                 repoUsage,
+				PreviousResourceAddresses: previousAddresses[project.Name],
+				Plugins:                   &config.Plugins,
+				Logging:                   config.Logging,
+			})
+			if err != nil {
+				var quotaErr *pkgscanner.RunQuotaExceededError
+				if !errors.As(err, &quotaErr) {
+					return nil, fmt.Errorf("failed to scan project %q: %w", project.Name, err)
+				}
+				runQuotaMessage = quotaErr.Message
+				result = nil
+			}
+		}
+
+		// Record the project as failed and keep going so the run still uploads
+		// and the comment can explain why there are no costs.
+		if result == nil {
+			quotaFailedProjects[project.Name] = true
+			projects = append(projects, pkgscanner.ProjectResult{Name: project.Name, Config: project})
+			continue
 		}
 		projects = append(projects, *result)
 	}
@@ -219,6 +247,8 @@ func (config *Config) ScanDirectory(ctx context.Context, dir string, accessToken
 		HasConfigFile:          hasConfigFile,
 		UsageFilePath:          repoConfig.UsageFilePath,
 		ConfigFileHasUsageFile: repoConfig.UsageFilePath != "",
+		RunQuotaMessage:        runQuotaMessage,
+		QuotaFailedProjects:    quotaFailedProjects,
 	}, nil
 }
 

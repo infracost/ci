@@ -215,6 +215,44 @@ func TestTrackDiff_TaggingFixed(t *testing.T) {
 	trackDiff(context.Background(), client, head, base)
 }
 
+func TestTrackDiff_QuotaFailedProject(t *testing.T) {
+	client := mocks.NewMockClient(t)
+
+	base := &config.DirectoryResult{
+		Projects: []pkgscanner.ProjectResult{
+			{
+				Name: "p",
+				FinopsResults: []*provider.FinopsPolicyResult{
+					{
+						PolicyId:   "fp-1",
+						PolicySlug: "aws-gp2-volumes",
+						FailingResources: []*provider.FinopsPolicyFailingResource{
+							{CauseAddress: "aws_ebs_volume.old"},
+						},
+					},
+				},
+				TagPolicyResults: []goprotoevent.TaggingPolicyResult{
+					{
+						TagPolicyID: "tp-1",
+						FailingResources: []goprotoevent.TagPolicyResultResource{
+							{Address: "aws_instance.untagged"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// The run limit stopped the head scan, so the project has no results.
+	head := &config.DirectoryResult{
+		Projects:            []pkgscanner.ProjectResult{{Name: "p"}},
+		QuotaFailedProjects: map[string]bool{"p": true},
+	}
+
+	// No Push calls expected — nothing was fixed, the project was never priced.
+	trackDiff(context.Background(), client, head, base)
+}
+
 func TestTrackDiff_NilBase(t *testing.T) {
 	client := mocks.NewMockClient(t)
 	// No Push calls expected.

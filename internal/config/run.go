@@ -166,10 +166,19 @@ func BuildRunInput(opts RunInputOptions) dashboard.RunInput {
 
 		pr := dashboard.ProjectResultInput{
 			ProjectName: head.Name,
-			Breakdown:   buildBreakdownInput(head),
 		}
 
-		if base != nil {
+		headQuotaFailed := opts.HeadResult.QuotaFailedProjects[head.Name]
+		baseQuotaFailed := opts.BaseResult != nil && opts.BaseResult.QuotaFailedProjects[head.Name]
+
+		// A quota-failed project has no cost, so uploading a breakdown would
+		// record it at $0 and a diff would report the other side's whole cost.
+		if !headQuotaFailed {
+			breakdown := buildBreakdownInput(head)
+			pr.Breakdown = &breakdown
+		}
+
+		if base != nil && !headQuotaFailed && !baseQuotaFailed {
 			pastBreakdown := buildBreakdownInput(base)
 			pr.PastBreakdown = &pastBreakdown
 			diff := buildDiffBreakdownInput(base, head)
@@ -188,7 +197,14 @@ func BuildRunInput(opts RunInputOptions) dashboard.RunInput {
 			pr.BreakdownSha = head.Config.ConfigSHA()
 		}
 
-		pr.Metadata = buildProjectMetadata(head, workspace, projectType, projectPath, opts.Command == "comment")
+		var quotaMessage string
+		if headQuotaFailed {
+			quotaMessage = truncateRunQuotaMessage(opts.HeadResult.RunQuotaMessage)
+		} else if baseQuotaFailed {
+			quotaMessage = truncateRunQuotaMessage(opts.BaseResult.RunQuotaMessage)
+		}
+
+		pr.Metadata = buildProjectMetadata(head, workspace, projectType, projectPath, opts.Command == "comment", quotaMessage)
 		pr.FinopsPolicyResults = buildFinopsPolicyResults(head.FinopsResults, head.Resources, head.Name, workspace, isTerraform)
 		pr.TagPolicyResults = buildTagPolicyResults(head.TagPolicyResults)
 
@@ -577,7 +593,9 @@ func buildTagPolicyResults(results []goprotoevent.TaggingPolicyResult) []map[str
 	return out
 }
 
-func buildProjectMetadata(project *pkgscanner.ProjectResult, workspace, projectType, projectPath string, isDiff bool) *dashboard.ProjectMetadataInput {
+// quotaMessage, when non-empty, records the org's run limit as a project error
+// so the dashboard shows code 401 rather than a generic breakdown failure.
+func buildProjectMetadata(project *pkgscanner.ProjectResult, workspace, projectType, projectPath string, isDiff bool, quotaMessage string) *dashboard.ProjectMetadataInput {
 	meta := &dashboard.ProjectMetadataInput{
 		Path:               projectPath,
 		Type:               projectType,
@@ -614,6 +632,15 @@ func buildProjectMetadata(project *pkgscanner.ProjectResult, workspace, projectT
 			warnings = append(warnings, pd)
 		}
 	}
+
+	if quotaMessage != "" {
+		errors = append(errors, dashboard.ProjectDiagnostic{
+			Code:    diagnostic.CodeRunQuotaExceeded,
+			Message: quotaMessage,
+			IsError: true,
+		})
+	}
+
 	meta.Errors = errors
 	meta.Warnings = warnings
 

@@ -6,6 +6,8 @@ import (
 
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	repoconfig "github.com/infracost/config"
+	"github.com/infracost/go-proto/pkg/diagnostic"
+	"github.com/infracost/go-proto/pkg/rat"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -180,4 +182,64 @@ func TestBuildRunInput_BreakdownShaOmittedWithoutConfig(t *testing.T) {
 
 	require.Len(t, input.ProjectResults, 1)
 	assert.Empty(t, input.ProjectResults[0].BreakdownSha)
+}
+
+// A quota-failed project carries the dashboard's run-quota code (401) rather
+// than the generic breakdown error the run used to report.
+func TestBuildRunInput_RunQuotaDiagnostic(t *testing.T) {
+	input := BuildRunInput(RunInputOptions{
+		BaseResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{
+				{Name: "project-a", TotalMonthlyCost: rat.New(500)},
+				{Name: "project-b", TotalMonthlyCost: rat.New(500)},
+			},
+		},
+		HeadResult: &DirectoryResult{
+			Projects:            []pkgscanner.ProjectResult{{Name: "project-a"}, {Name: "project-b"}},
+			RunQuotaMessage:     "Infracost free monthly run limit exceeded. Please contact hello@infracost.io to purchase usage pack.",
+			QuotaFailedProjects: map[string]bool{"project-a": true},
+		},
+	})
+
+	require.Len(t, input.ProjectResults, 2)
+	require.Len(t, input.ProjectResults[0].Metadata.Errors, 1)
+	assert.Equal(t, diagnostic.CodeRunQuotaExceeded, input.ProjectResults[0].Metadata.Errors[0].Code)
+	assert.Contains(t, input.ProjectResults[0].Metadata.Errors[0].Message, "hello@infracost.io")
+	assert.True(t, input.ProjectResults[0].Metadata.Errors[0].IsError)
+
+	// No breakdown or diff for the quota-failed project: its zero cost is
+	// missing data, not a $500 saving.
+	assert.Nil(t, input.ProjectResults[0].Breakdown)
+	assert.Nil(t, input.ProjectResults[0].Diff)
+	assert.Nil(t, input.ProjectResults[0].PastBreakdown)
+
+	assert.Empty(t, input.ProjectResults[1].Metadata.Errors)
+	require.NotNil(t, input.ProjectResults[1].Breakdown)
+	require.NotNil(t, input.ProjectResults[1].Diff)
+	assert.Equal(t, "-500", input.ProjectResults[1].Diff.TotalMonthlyCost)
+}
+
+// A base-branch quota failure carries the same diagnostic: the head scan
+// succeeded, but the project's past cost is missing for the same reason.
+func TestBuildRunInput_RunQuotaDiagnosticFromBase(t *testing.T) {
+	input := BuildRunInput(RunInputOptions{
+		BaseResult: &DirectoryResult{
+			Projects:            []pkgscanner.ProjectResult{{Name: "project-a"}},
+			RunQuotaMessage:     "Infracost free monthly run limit exceeded. Please contact hello@infracost.io to purchase usage pack.",
+			QuotaFailedProjects: map[string]bool{"project-a": true},
+		},
+		HeadResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{Name: "project-a", TotalMonthlyCost: rat.New(200)}},
+		},
+	})
+
+	require.Len(t, input.ProjectResults, 1)
+	require.Len(t, input.ProjectResults[0].Metadata.Errors, 1)
+	assert.Equal(t, diagnostic.CodeRunQuotaExceeded, input.ProjectResults[0].Metadata.Errors[0].Code)
+	assert.Nil(t, input.ProjectResults[0].Diff)
+	assert.Nil(t, input.ProjectResults[0].PastBreakdown)
+
+	// The head scan priced this project, so its own breakdown still uploads.
+	require.NotNil(t, input.ProjectResults[0].Breakdown)
+	assert.Equal(t, "200", input.ProjectResults[0].Breakdown.TotalMonthlyCost)
 }

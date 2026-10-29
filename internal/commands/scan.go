@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -168,6 +169,12 @@ func scan(cfg *config.Config, args *scanArgs) error {
 
 	eventsClient := cfg.Events.Client(httpClient)
 	trackRun(ctx, eventsClient, result, nil, time.Since(startTime).Seconds(), "upload")
+
+	// Uploaded first so the dashboard records the attempt, then failed: there is
+	// no comment on this path, so a red step is the only signal.
+	if result.RunQuotaMessage != "" {
+		return errors.New(result.RunQuotaMessage)
+	}
 
 	return nil
 }

@@ -69,7 +69,9 @@ type RunError struct {
 // ProjectResultInput represents a single project's cost data for addRun.
 type ProjectResultInput struct {
 	ProjectName         string                    `json:"projectName"`
-	Breakdown           BreakdownInput            `json:"breakdown"`
+	// Breakdown is nil for a project that was never priced, so the dashboard
+	// keeps its last recorded cost instead of storing a zero.
+	Breakdown           *BreakdownInput           `json:"breakdown,omitempty"`
 	PastBreakdown       *BreakdownInput           `json:"pastBreakdown,omitempty"`
 	Diff                *BreakdownInput           `json:"diff,omitempty"`
 	Metadata            *ProjectMetadataInput     `json:"projectMetadata,omitempty"`
