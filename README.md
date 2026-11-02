@@ -650,26 +650,26 @@ docker build -t infracost-ci:dev .
 
 ### Cutting a release
 
-Push the tag. Nothing else.
+Run the Release workflow on `main` with the version, without a leading `v`:
 
 ```bash
-git tag v2.0.0
-git push origin v2.0.0
+gh workflow run release.yml --repo infracost/ci --ref main -f version=2.0.0
 ```
 
-Do not use `gh release create`. The workflow drafts the release itself, builds
-into it, verifies, and publishes last. A release that already exists and is
-published makes the workflow refuse, because drafting over it would 404 every
-pinned download and hand `latest` back to the previous version.
+Don't push the tag or use `gh release create`. Pushing a tag doesn't start a
+release. The workflow drafts the release itself against the commit it builds,
+verifies, and publishes last, which creates the `v2.0.0` tag. A release that
+already exists and is published makes the workflow refuse, because drafting
+over it would 404 every pinned download and hand `latest` back to the previous
+version. So does a `v2.0.0` tag on a different commit.
 
-If that happens, delete the release and the tag, then push the tag again:
+If that happens, delete the release and the tag, then run the workflow again:
 
 ```bash
-gh release delete v2.0.0 --repo infracost/ci --yes
-git push --delete origin v2.0.0
+gh release delete v2.0.0 --repo infracost/ci --yes --cleanup-tag
 ```
 
-Pushing a `v*.*.*` tag builds six platforms, attaches `checksums.txt`, publishes the
+A release builds six platforms, attaches `checksums.txt`, publishes the
 release, and pushes `ghcr.io/infracost/ci` for `linux/amd64` and `linux/arm64`. The
 image is only tagged once the archives and the image have both been verified, so a
 rolled-back release leaves nothing behind. Tagging also copies that digest to
