@@ -308,6 +308,18 @@ jobs:
             fi
           fi
 
+          # Publishing onto a tag that appeared since the draft was made would
+          # attach this release to that tag's commit. Only "not found" is free.
+          if TAG_SHA=$(gh api "repos/${REPOSITORY}/commits/${TAG}" --jq .sha 2>"$RUNNER_TEMP/tag-err"); then
+            if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+              echo "Tag $TAG is at $TAG_SHA but this run built $GITHUB_SHA. Release a new version."
+              exit 1
+            fi
+          elif ! grep -qE "HTTP (404|422)" "$RUNNER_TEMP/tag-err"; then
+            echo "Couldn't check $TAG: $(cat "$RUNNER_TEMP/tag-err")"
+            exit 1
+          fi
+
           if [ "$LATEST" = "--latest" ]; then
             echo "LATEST=true" >> "$GITHUB_OUTPUT"
           else
