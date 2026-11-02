@@ -39,7 +39,7 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${INPUT_VERSION#v}"
+          VERSION="$INPUT_VERSION"
 
           # =~ matches the whole string; grep is line-based, so a newline in a
           # dispatch input would smuggle extra keys into $GITHUB_OUTPUT.
