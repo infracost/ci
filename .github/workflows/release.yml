@@ -1,11 +1,11 @@
 name: Release
 # Names the version in the run title, which is how plugin-refresh identifies the
 # run its own dispatch started.
-run-name: Release ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+run-name: Release v${{ inputs.version }}
+# Releases are dispatched on main (by hand or by plugin-refresh) rather than
+# started by a pushed tag. The draft release targets the dispatched commit, so
+# publishing it creates the tag there.
 on:
-  push:
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
     inputs:
       version:
@@ -15,11 +15,10 @@ on:
 
 permissions: {}
 
-# Keyed on the version, normalised so a dispatch and a tag push of the same
-# version share a group. A workflow-wide key would evict a queued release of a
-# different version: GitHub keeps only one pending run per group.
+# Keyed on the version: a workflow-wide key would evict a queued release of a
+# different version, since GitHub keeps only one pending run per group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+  group: ${{ github.workflow }}-v${{ inputs.version }}
   cancel-in-progress: false
 
 defaults:
@@ -32,21 +31,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # A dispatch can name any ref, which would release unreviewed code.
-    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
     steps:
       - id: version
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            RAW_VERSION="$INPUT_VERSION"
-          else
-            RAW_VERSION="${GITHUB_REF#refs/tags/}"
-          fi
-          VERSION="${RAW_VERSION#v}"
+          VERSION="$INPUT_VERSION"
 
           # =~ matches the whole string; grep is line-based, so a newline in a
           # dispatch input would smuggle extra keys into $GITHUB_OUTPUT.
@@ -313,6 +306,18 @@ jobs:
               echo "Release $CURRENT is newer than $TAG, leaving the latest redirect alone."
               LATEST="--latest=false"
             fi
+          fi
+
+          # Publishing onto a tag that appeared since the draft was made would
+          # attach this release to that tag's commit. Only "not found" is free.
+          if TAG_SHA=$(gh api "repos/${REPOSITORY}/commits/${TAG}" --jq .sha 2>"$RUNNER_TEMP/tag-err"); then
+            if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+              echo "Tag $TAG is at $TAG_SHA but this run built $GITHUB_SHA. Release a new version."
+              exit 1
+            fi
+          elif ! grep -qE "HTTP (404|422)" "$RUNNER_TEMP/tag-err"; then
+            echo "Couldn't check $TAG: $(cat "$RUNNER_TEMP/tag-err")"
+            exit 1
           fi
 
           if [ "$LATEST" = "--latest" ]; then
