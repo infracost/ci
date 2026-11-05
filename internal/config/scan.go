@@ -13,6 +13,7 @@ import (
 	repoconfig "github.com/infracost/config"
 	gorat "github.com/infracost/go-proto/pkg/rat"
 	"github.com/infracost/proto/gen/go/infracost/parser/event"
+	"github.com/infracost/proto/gen/go/infracost/usage"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -121,6 +122,50 @@ func ParseRunParameters(raw dashboard.RunParameters) (*ParsedRunParameters, erro
 	return parsed, nil
 }
 
+// projectScan is what ScanDirectory has worked out by the time it scans a project.
+type projectScan struct {
+	absoluteDir string
+	cacheDir    string
+	repoConfig  *repoconfig.Config
+	project     *repoconfig.Project
+	accessToken string
+	branch      string
+	runParams   *ParsedRunParameters
+	repoUsage   *usage.Usage
+	previous    []string
+}
+
+// projectScanOptions builds the scanner options for one project: what the scan
+// worked out (s) plus the settings that come from the job's environment.
+func (config *Config) projectScanOptions(s projectScan) *pkgscanner.ScanProjectOptions {
+	sources := config.PrivateSources()
+	if len(sources) > 0 {
+		warnPrivateSources(sources)
+	}
+	return &pkgscanner.ScanProjectOptions{
+		RootDir:                   s.absoluteDir,
+		CacheDir:                  s.cacheDir,
+		RepoConfig:                s.repoConfig,
+		Project:                   s.project,
+		AccessToken:               s.accessToken,
+		BranchName:                s.branch,
+		RepositoryName:            s.runParams.RepositoryName,
+		OrgID:                     s.runParams.OrganizationID,
+		PricingEndpoint:           config.PricingEndpoint,
+		Currency:                  s.repoConfig.Currency,
+		TraceID:                   trace.ID,
+		ProductionFilters:         s.runParams.ProductionFilters,
+		FinopsPolicies:            s.runParams.FinopsPolicies,
+		TagPolicies:               s.runParams.TagPolicies,
+		UsageDefaults:             s.runParams.UsageDefaults,
+		RepoUsage:                 s.repoUsage,
+		PreviousResourceAddresses: s.previous,
+		Plugins:                   &config.Plugins,
+		Logging:                   config.Logging,
+		PrivateSourceAllowlist:    sources,
+	}
+}
+
 func (config *Config) ScanDirectory(ctx context.Context, dir string, accessToken string, runParams *ParsedRunParameters, previousAddresses map[string][]string, projectFilter string, branch string) (*DirectoryResult, error) {
 	absoluteDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -186,27 +231,17 @@ func (config *Config) ScanDirectory(ctx context.Context, dir string, accessToken
 		var result *pkgscanner.ProjectResult
 		if runQuotaMessage == "" {
 			var err error
-			result, err = pkgscanner.ScanProject(ctx, &pkgscanner.ScanProjectOptions{
-				RootDir:                   absoluteDir,
-				CacheDir:                  cacheDir,
-				RepoConfig:                repoConfig,
-				Project:                   project,
-				AccessToken:               accessToken,
-				BranchName:                branch,
-				RepositoryName:            runParams.RepositoryName,
-				OrgID:                     runParams.OrganizationID,
-				PricingEndpoint:           config.PricingEndpoint,
-				Currency:                  repoConfig.Currency,
-				TraceID:                   trace.ID,
-				ProductionFilters:         runParams.ProductionFilters,
-				FinopsPolicies:            runParams.FinopsPolicies,
-				TagPolicies:               runParams.TagPolicies,
-				UsageDefaults:             runParams.UsageDefaults,
-				RepoUsage:                 repoUsage,
-				PreviousResourceAddresses: previousAddresses[project.Name],
-				Plugins:                   &config.Plugins,
-				Logging:                   config.Logging,
-			})
+			result, err = pkgscanner.ScanProject(ctx, config.projectScanOptions(projectScan{
+				absoluteDir: absoluteDir,
+				cacheDir:    cacheDir,
+				repoConfig:  repoConfig,
+				project:     project,
+				accessToken: accessToken,
+				branch:      branch,
+				runParams:   runParams,
+				repoUsage:   repoUsage,
+				previous:    previousAddresses[project.Name],
+			}))
 			if err != nil {
 				var quotaErr *pkgscanner.RunQuotaExceededError
 				if !errors.As(err, &quotaErr) {
