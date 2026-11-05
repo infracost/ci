@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"unicode"
 
 	"github.com/infracost/ci/v2/internal/api/dashboard"
 	"github.com/infracost/ci/v2/internal/api/dashboard/graphql"
@@ -44,6 +46,17 @@ type Config struct {
 	// man-in-the-middle switch on a request carrying a VCS token: TLSConfig
 	// warns when it is on, and TLSCACertFile covers the legitimate case.
 	TLSInsecureSkipVerify bool `env:"INFRACOST_CI_VCS_TLS_INSECURE_SKIP_VERIFY" flag:"vcs-tls-insecure-skip-verify" usage:"Skip VCS TLS certificate verification (prefer --vcs-tls-ca-cert-file)"`
+
+	// PrivateSourceAllowlist is a comma- or whitespace-separated list of hosts, IP addresses and
+	// CIDR ranges that module sources may be fetched from even though they are on
+	// a private network (a self-hosted git server, say). The parser's SSRF guard
+	// stays on for everything else, and loopback, link-local (the cloud metadata
+	// address), multicast and the unspecified address are never allowed. It is read
+	// only from the job's environment: never from infracost.yml, a config template
+	// or the dashboard. Do not set it on a job that scans a fork's pull request
+	// (pull_request_target included): the fork's module sources could then reach any
+	// path on an allowlisted host with the job's git credentials.
+	PrivateSourceAllowlist string `env:"INFRACOST_CI_PRIVATE_SOURCE_ALLOWLIST"`
 
 	// VCSProvider is the VCS hosting the repository — github, gitlab, azure_repos
 	// or bitbucket. Unprefixed on purpose: INFRACOST_VCS_PROVIDER is the v0.1
@@ -92,7 +105,27 @@ func (config *Config) Process() {
 	events.RegisterMetadata("environment", config.Environment.String())
 	events.RegisterMetadata("isDefaultPricingApiEndpoint", config.PricingEndpoint == "https://pricing.api.infracost.io")
 	events.RegisterMetadata("vcsInferred", config.VCSInferences.Inferred)
+	events.RegisterMetadata("privateSourceAllowlistSet", len(config.PrivateSources()) > 0)
 	logging.Debugf("%s", config.VCSInferences)
+}
+
+var privateSourcesWarned sync.Once
+
+// warnPrivateSources says, once per run and where the list is used, that the
+// SSRF guard is relaxed for sources.
+func warnPrivateSources(sources []string) {
+	privateSourcesWarned.Do(func() {
+		logging.Warnf("INFRACOST_CI_PRIVATE_SOURCE_ALLOWLIST is set: modules may be fetched from %s even though they are on a private network", strings.Join(sources, ", "))
+	})
+}
+
+// PrivateSources splits PrivateSourceAllowlist on commas and whitespace. Blank
+// entries are dropped so a trailing comma or a multi-line CI variable does not
+// become an entry.
+func (config *Config) PrivateSources() []string {
+	return strings.FieldsFunc(config.PrivateSourceAllowlist, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
 }
 
 // TLSConfig builds the TLS configuration the VCS clients use, or nil when
