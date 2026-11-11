@@ -12,6 +12,15 @@ import (
 	"github.com/infracost/cli/pkg/logging"
 )
 
+// GitLab hint texts, named when a post failed on the token or its scopes.
+const (
+	gitLabDocsURL   = "https://www.infracost.io/docs/integrations/gitlab_ci/"
+	gitLabTokenHint = "the GitLab token is invalid or expired: set GITLAB_TOKEN, or --gitlab-token, to a project, group or personal access token. This is not a permission problem: see " + gitLabDocsURL
+	// The predefined CI_JOB_TOKEN is the common mistake here: it authenticates,
+	// so it fails on the permission rather than the token.
+	gitLabPermissionHint = "the GitLab token cannot comment on this merge request: it needs the api scope and at least the Reporter role on the project. The predefined CI_JOB_TOKEN cannot post notes, so use a project access token instead: see " + gitLabDocsURL
+)
+
 // fillGitLabPullRequest fills the merge request author, and the title on a
 // branch pipeline that has no CI_MERGE_REQUEST_TITLE.
 //

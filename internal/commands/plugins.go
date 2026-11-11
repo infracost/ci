@@ -192,7 +192,13 @@ func detectProjects(cfg *config.Config, w io.Writer, path string) error {
 	}
 
 	if len(repoConfig.Projects) == 0 {
-		return fmt.Errorf("no projects found in %s", dir)
+		// Autodetection asks the parser plugins, so a plugin that is missing
+		// or will not start answers the same as a directory with nothing in
+		// it. Naming the plugins separates the two.
+		if err := checkRequiredPlugins(cfg.Plugins.List()); err != nil {
+			return fmt.Errorf("no projects found in %s, and this may be why: %w", dir, err)
+		}
+		return fmt.Errorf("no projects found in %s: the parser plugins are all usable, so nothing here was recognised as infrastructure as code. A Terraform plan JSON file must be named as the path, not the directory holding it", dir)
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)

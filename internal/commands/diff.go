@@ -159,6 +159,7 @@ func resolveDiffContext(ctx context.Context, cfg *config.Config, args *diffArgs)
 	if args.repoURL == "" {
 		return diffContext{}, fmt.Errorf("cannot determine the repository URL: set INFRACOST_VCS_REPOSITORY_URL")
 	}
+	registerRepoSlug(args.repoURL)
 
 	// Fail before scanning: diff is always a pull request run, so a missing or
 	// unbuildable PR URL would upload as a branch run and lose the PR.
@@ -507,7 +508,7 @@ func diff(cfg *config.Config, args *diffArgs, vcsCtx diffContext, vcsClient vcs.
 	if err != nil {
 		// Warned, not wrapped: the returned error is pushed as an infracost-error
 		// event, and fixed prose does not belong in every one of those.
-		if hint := azurePostHint(vcsCtx.provider, args.azureToken, err); hint != "" {
+		if hint := postHint(vcsCtx.provider, args, err); hint != "" {
 			logging.Warnf("%s", hint)
 		}
 		return fmt.Errorf("failed to post comment: %w", err)

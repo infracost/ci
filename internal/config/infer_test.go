@@ -352,7 +352,7 @@ func TestInferVCS(t *testing.T) {
 		},
 		{
 			name:         "unmapped platform infers nothing",
-			env:          map[string]string{"CIRCLECI": "true"},
+			env:          map[string]string{"TRAVIS": "true"},
 			wantPlatform: "",
 			wantProvider: "",
 			want:         VCS{},

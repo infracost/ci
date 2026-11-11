@@ -16,6 +16,15 @@ import (
 // there, because the comment client only needs a base for GHES.
 const gitHubDotComAPIURL = "https://api.github.com"
 
+// GitHub hint texts, named when a post failed on the token or its scopes.
+const (
+	gitHubDocsURL   = "https://www.infracost.io/docs/integrations/github_actions/"
+	gitHubTokenHint = "the GitHub token is invalid or expired: check GITHUB_TOKEN is set on the job, or set --github-token. This is not a permission problem: see " + gitHubDocsURL
+	// The workflow GITHUB_TOKEN and a personal access token fail the same way
+	// and need different fixes, so both are named.
+	gitHubPermissionHint = `the GitHub token cannot comment on this pull request: the workflow GITHUB_TOKEN needs "permissions: pull-requests: write" on the job, and a personal access token needs the repo scope: see ` + gitHubDocsURL
+)
+
 // fillGitHubPullRequest fills the title and author from the pull request
 // itself, the way fillAzurePullRequest does for Azure Repos.
 //

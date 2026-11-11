@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/http"
 	"time"
 
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/cli/pkg/logging"
 	"github.com/infracost/vcs/pkg/vcs"
 )
@@ -109,4 +111,59 @@ func sleep(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// postHints are the two things a failed post can be: a token that was never
+// usable, and one whose principal lacks the permission to comment. The
+// permission is named per provider, because nothing about it carries over.
+type postHints struct {
+	token      string
+	permission string
+}
+
+// providerPostHints covers every provider but Azure Repos, whose 403 splits
+// further on the principal behind the token and has azurePostHint to itself.
+var providerPostHints = map[string]postHints{
+	vcsurl.ProviderGitHub:    {token: gitHubTokenHint, permission: gitHubPermissionHint},
+	vcsurl.ProviderGitLab:    {token: gitLabTokenHint, permission: gitLabPermissionHint},
+	vcsurl.ProviderBitbucket: {token: bitbucketTokenHint, permission: bitbucketPermissionHint},
+}
+
+// notFoundHint fronts the permission hint on a 404, where the pull request
+// being gone and the token not being allowed to see it look the same.
+const notFoundHint = "the pull request was not found: check the repository URL and pull request number first. " +
+	"If both are right, this is a permission problem — "
+
+// postHint names what to fix when a comment post failed on the token or the
+// permissions behind it — a run that scans, prices and then posts nothing is
+// otherwise indistinguishable from one that is simply broken.
+//
+// Returns "" when there is nothing specific to say.
+func postHint(provider string, args *diffArgs, err error) string {
+	if provider == vcsurl.ProviderAzureRepos {
+		return azurePostHint(provider, args.azureToken, err)
+	}
+
+	hints, ok := providerPostHints[provider]
+	if !ok {
+		return ""
+	}
+
+	var postErr *vcs.PostError
+	if !errors.As(err, &postErr) {
+		return ""
+	}
+
+	switch postErr.StatusCode {
+	case http.StatusUnauthorized:
+		return hints.token
+	case http.StatusForbidden:
+		return hints.permission
+	// All three providers answer "no such repository" to a token not allowed
+	// to see one, so a 404 is either that or a pull request that is not there.
+	// Naming both keeps a wrong number from being read as a token scope.
+	case http.StatusNotFound:
+		return notFoundHint + hints.permission
+	}
+	return ""
 }

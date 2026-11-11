@@ -85,12 +85,22 @@ func run() int {
 		return 1
 	}
 
+	// Held rather than printed here: the error itself is written below, out of
+	// the diagnostics, so printing the hint now would put the fix above the
+	// problem it answers.
+	var inputHint string
 	if err := cmd.Execute(); err != nil {
+		inputHint = commands.UnknownInputHint(err)
 		diags = diags.Add(diagnostic.FromError(parserpb.DiagnosticType_DIAGNOSTIC_TYPE_UNSPECIFIED, err))
 	}
 	if diags.Critical().Len() > 0 {
 		for _, diag := range diags.Critical().Unwrap() {
 			_, _ = fmt.Fprintf(os.Stderr, "%s\n", diag.FormatMessage())
+		}
+		// The root command silences cobra's own usage block and error, so this
+		// is the only thing that names a fix for an unknown command or flag.
+		if inputHint != "" {
+			_, _ = fmt.Fprintln(os.Stderr, inputHint)
 		}
 		client := cfg.Events.Client(api.Client(context.Background(), cfg.Auth.TokenFromCache(context.Background()), cfg.OrgID))
 		for _, diag := range diags.Critical().Unwrap() {

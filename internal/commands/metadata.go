@@ -31,3 +31,14 @@ func registerVCSProvider(cfg *config.Config) (string, error) {
 	events.RegisterMetadata("vcsProvider", provider)
 	return provider, err
 }
+
+// registerRepoSlug records the repository this run is for, in the same form
+// `infracost ci setup` registers, so the funnel from a setup to the first
+// pipeline run joins on org and repository rather than on the person — the
+// setup is attributed to a developer, the run to whatever identity the
+// pipeline carries.
+func registerRepoSlug(repoURL string) {
+	if slug := vcsurl.RepoSlug(repoURL); slug != "" {
+		events.RegisterMetadata("repoSlug", slug)
+	}
+}
