@@ -22,6 +22,9 @@ import (
 // v01APIKeyPrefix is the prefix every v0.1 dashboard API key carries.
 const v01APIKeyPrefix = "ico-"
 
+// privateSourcesWarned makes warnPrivateSources say its piece once per run.
+var privateSourcesWarned sync.Once
+
 // Config holds the shared configuration used by all subcommands.
 type Config struct {
 	// Environment is the environment to target for operations / authentication (development or production). Defaults to
@@ -108,8 +111,6 @@ func (config *Config) Process() {
 	events.RegisterMetadata("privateSourceAllowlistSet", len(config.PrivateSources()) > 0)
 	logging.Debugf("%s", config.VCSInferences)
 }
-
-var privateSourcesWarned sync.Once
 
 // warnPrivateSources says, once per run and where the list is used, that the
 // SSRF guard is relaxed for sources.
