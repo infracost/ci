@@ -14,6 +14,7 @@ import (
 	goprotoevent "github.com/infracost/go-proto/pkg/event"
 	"github.com/infracost/go-proto/pkg/rat"
 	"github.com/infracost/proto/gen/go/infracost/provider"
+	"github.com/infracost/vcs/pkg/vcs/comment"
 )
 
 // RunInputOptions contains the parameters needed to build an addRun mutation input.
@@ -291,16 +292,13 @@ func buildRunInputFromMetadata(opts RunInputOptions, projectResults []dashboard.
 
 func buildBreakdownInput(result *pkgscanner.ProjectResult) dashboard.BreakdownInput {
 	monthlyCost := orZero(result.TotalMonthlyCost)
-
-	resources := make([]map[string]any, 0, len(result.Resources))
-	for _, r := range result.Resources {
-		resources = append(resources, resourceToJSON(r))
-	}
+	resources, freeResources := convertBreakdownResources(result.Resources)
 
 	return dashboard.BreakdownInput{
 		TotalHourlyCost:  monthlyCost.Div(rat.New(730)).String(),
 		TotalMonthlyCost: monthlyCost.String(),
 		Resources:        resources,
+		FreeResources:    freeResources,
 	}
 }
 
@@ -309,10 +307,227 @@ func buildDiffBreakdownInput(base, head *pkgscanner.ProjectResult) dashboard.Bre
 	baseCost := orZero(base.TotalMonthlyCost)
 	diffCost := headCost.Sub(baseCost)
 
+	// The same comparison the PR comment uses, over the same filtered set the
+	// breakdown gets, so the uploaded diff and the comment cannot disagree.
+	pastBreakdown := buildCostBreakdown(supportedResources(base.Resources))
+	currentBreakdown := buildCostBreakdown(supportedResources(head.Resources))
+
+	var resources []dashboard.BreakdownResourceInput
+	if diff := diffCostBreakdown(pastBreakdown, currentBreakdown); diff != nil {
+		// A diff resource carries only a name and costs, so type and tags come from
+		// the source resource: head first, then base for a removed one.
+		resources = convertDiffResources(diff.Resources, indexResources(head.Resources, base.Resources))
+	}
+
 	return dashboard.BreakdownInput{
 		TotalHourlyCost:  diffCost.Div(rat.New(730)).String(),
 		TotalMonthlyCost: diffCost.String(),
+		Resources:        resources,
 	}
+}
+
+// convertBreakdownResources splits resources the way the runner's outputBreakdown
+// does: free-and-unsupported to freeResources, unsupported dropped with its costs.
+func convertBreakdownResources(resources []*provider.Resource) (supported, free []dashboard.BreakdownResourceInput) {
+	for _, r := range resources {
+		if !r.IsSupported && !r.IsFree {
+			continue
+		}
+
+		res, _, _ := convertBreakdownResource(r)
+		if r.IsSupported {
+			supported = append(supported, res)
+		} else {
+			free = append(free, res)
+		}
+	}
+	return supported, free
+}
+
+// supportedResources keeps the set that reaches breakdown.resources, so the diff
+// describes the same one. A diff has no equivalent of freeResources.
+func supportedResources(resources []*provider.Resource) []*provider.Resource {
+	out := make([]*provider.Resource, 0, len(resources))
+	for _, r := range resources {
+		if r.IsSupported {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// indexChildResources maps a resource's children by name, so a diff
+// sub-resource can be matched to the resource it came from.
+func indexChildResources(r *provider.Resource) map[string]*provider.Resource {
+	if r == nil {
+		return nil
+	}
+	return indexResources(r.ChildResources)
+}
+
+// indexResources maps resources by name, preferring the first list. A diff
+// resource names a resource that may exist only on one side of the comparison.
+func indexResources(lists ...[]*provider.Resource) map[string]*provider.Resource {
+	index := map[string]*provider.Resource{}
+	for _, list := range lists {
+		for _, r := range list {
+			if _, ok := index[r.Name]; !ok {
+				index[r.Name] = r
+			}
+		}
+	}
+	return index
+}
+
+// convertBreakdownResource returns the resource alongside its rolled-up hourly
+// and monthly costs, so a parent can sum its children without reparsing them.
+func convertBreakdownResource(r *provider.Resource) (dashboard.BreakdownResourceInput, *rat.Rat, *rat.Rat) {
+	out := dashboard.BreakdownResourceInput{
+		Name:         r.Name,
+		ResourceType: r.Type,
+	}
+
+	if r.Metadata != nil {
+		out.Metadata = &dashboard.BreakdownResourceMetadataInput{
+			Checksum:            r.Metadata.DeepChecksum,
+			DefaultTagsChecksum: r.Metadata.DefaultTagsChecksum,
+		}
+	}
+
+	out.Tags, out.DefaultTags = splitTags(r.Tagging)
+
+	hourlyCost := rat.Zero
+	monthlyCost := rat.Zero
+
+	if r.Costs != nil {
+		for _, c := range r.Costs.Components {
+			cc, hourly, monthly := convertBreakdownCostComponent(c)
+			out.CostComponents = append(out.CostComponents, cc)
+			hourlyCost = hourlyCost.Add(hourly)
+			monthlyCost = monthlyCost.Add(monthly)
+		}
+	}
+
+	for _, child := range r.ChildResources {
+		sub, hourly, monthly := convertBreakdownResource(child)
+		out.SubResources = append(out.SubResources, sub)
+		hourlyCost = hourlyCost.Add(hourly)
+		monthlyCost = monthlyCost.Add(monthly)
+	}
+
+	out.HourlyCost = hourlyCost.String()
+	out.MonthlyCost = monthlyCost.String()
+
+	return out, hourlyCost, monthlyCost
+}
+
+func convertBreakdownCostComponent(c *provider.CostComponent) (dashboard.BreakdownCostComponentInput, *rat.Rat, *rat.Rat) {
+	hourlyCost := rat.Zero
+	monthlyCost := rat.Zero
+
+	out := dashboard.BreakdownCostComponentInput{
+		Name:            c.Name,
+		Unit:            c.Unit,
+		UsageBased:      c.UsageBased,
+		Price:           "0",
+		HourlyCost:      "0",
+		MonthlyCost:     "0",
+		HourlyQuantity:  "0",
+		MonthlyQuantity: "0",
+	}
+
+	if c.PeriodPrice == nil || c.Quantity == nil {
+		return out, hourlyCost, monthlyCost
+	}
+
+	hourlyQty, monthlyQty := pkgscanner.ConvertQuantityByPeriod(rat.FromProto(c.Quantity), c.PeriodPrice.Period)
+	out.HourlyQuantity = hourlyQty.String()
+	out.MonthlyQuantity = monthlyQty.String()
+
+	if c.PeriodPrice.Price != nil {
+		price := pkgscanner.ApplyDiscount(rat.FromProto(c.PeriodPrice.Price), rat.FromProto(c.DiscountRate))
+		hourlyCost = hourlyQty.Mul(price)
+		monthlyCost = monthlyQty.Mul(price)
+		out.Price = price.String()
+		out.HourlyCost = hourlyCost.String()
+		out.MonthlyCost = monthlyCost.String()
+	}
+
+	return out, hourlyCost, monthlyCost
+}
+
+// splitTags separates user tags from provider default tags, which the dashboard
+// reads as two fields.
+func splitTags(tagging *provider.Tagging) (tags, defaultTags map[string]string) {
+	if tagging == nil {
+		return nil, nil
+	}
+
+	for _, t := range tagging.Tags {
+		if t.IsDefault {
+			if defaultTags == nil {
+				defaultTags = map[string]string{}
+			}
+			defaultTags[t.Key] = t.Value
+			continue
+		}
+		if tags == nil {
+			tags = map[string]string{}
+		}
+		tags[t.Key] = t.Value
+	}
+
+	return tags, defaultTags
+}
+
+// convertDiffResources maps diff resources onto the upload shape. Their costs are
+// deltas, so hourly derives from monthly; byName supplies the type and tags.
+func convertDiffResources(resources []comment.BreakdownResource, byName map[string]*provider.Resource) []dashboard.BreakdownResourceInput {
+	if len(resources) == 0 {
+		return nil
+	}
+
+	out := make([]dashboard.BreakdownResourceInput, 0, len(resources))
+	for _, r := range resources {
+		// The comment lists any added or removed resource as changed. Uploading a
+		// zero-dollar one would set the dashboard's has_diff; the runner's does not.
+		monthlyCost := orZero(r.MonthlyCost)
+		if monthlyCost.IsZero() && len(r.CostComponents) == 0 && len(r.SubResources) == 0 {
+			continue
+		}
+
+		source := byName[r.Name]
+		dr := dashboard.BreakdownResourceInput{
+			Name:         r.Name,
+			HourlyCost:   monthlyCost.Div(rat.New(730)).String(),
+			MonthlyCost:  monthlyCost.String(),
+			SubResources: convertDiffResources(r.SubResources, indexChildResources(source)),
+		}
+
+		if source != nil {
+			dr.ResourceType = source.Type
+			dr.Tags, dr.DefaultTags = splitTags(source.Tagging)
+		}
+
+		for _, c := range r.CostComponents {
+			ccMonthlyCost := orZero(c.MonthlyCost)
+			ccMonthlyQty := orZero(c.MonthlyQuantity)
+			dr.CostComponents = append(dr.CostComponents, dashboard.BreakdownCostComponentInput{
+				Name:            c.Name,
+				Unit:            c.Unit,
+				UsageBased:      c.UsageBased,
+				Price:           orZero(c.Price).String(),
+				HourlyCost:      ccMonthlyCost.Div(rat.New(730)).String(),
+				MonthlyCost:     ccMonthlyCost.String(),
+				HourlyQuantity:  ccMonthlyQty.Div(rat.New(730)).String(),
+				MonthlyQuantity: ccMonthlyQty.String(),
+			})
+		}
+
+		out = append(out, dr)
+	}
+
+	return out
 }
 
 func buildBudgetResults(results []goprotoevent.BudgetResult) []dashboard.BudgetResultInput {
@@ -645,10 +860,6 @@ func buildProjectMetadata(project *pkgscanner.ProjectResult, workspace, projectT
 	meta.Warnings = warnings
 
 	return meta
-}
-
-func resourceToJSON(r *provider.Resource) map[string]any {
-	return structToJSON(r)
 }
 
 func structToJSON(v any) map[string]any {
