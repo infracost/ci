@@ -308,13 +308,19 @@ func buildDiffBreakdownInput(base, head *pkgscanner.ProjectResult) dashboard.Bre
 	diffCost := headCost.Sub(baseCost)
 
 	// diffCostBreakdown is the same per-resource comparison the PR comment uses,
-	// so the uploaded diff and the posted comment cannot disagree.
-	pastBreakdown := buildCostBreakdown(base.Resources)
-	currentBreakdown := buildCostBreakdown(head.Resources)
+	// so the uploaded diff and the posted comment cannot disagree. The inputs are
+	// filtered first: the runner diffs and breaks down the same resource set
+	// (outputBreakdown runs over both), so an unsupported resource must not reach
+	// the diff when it never reaches the breakdown.
+	pastBreakdown := buildCostBreakdown(supportedResources(base.Resources))
+	currentBreakdown := buildCostBreakdown(supportedResources(head.Resources))
 
 	var resources []dashboard.BreakdownResourceInput
 	if diff := diffCostBreakdown(pastBreakdown, currentBreakdown); diff != nil {
-		resources = convertDiffResources(diff.Resources)
+		// A diff resource carries only a name and costs, so the type and tags are
+		// recovered from the resource it was built from, head first then base for
+		// one that was removed.
+		resources = convertDiffResources(diff.Resources, indexResources(head.Resources, base.Resources))
 	}
 
 	return dashboard.BreakdownInput{
@@ -325,26 +331,60 @@ func buildDiffBreakdownInput(base, head *pkgscanner.ProjectResult) dashboard.Bre
 }
 
 // convertBreakdownResources splits resources the way the runner's
-// outputBreakdown does: unsupported free resources go to freeResources, and
-// unsupported resources with no costs are dropped.
+// outputBreakdown does: a free resource that is not supported goes to
+// freeResources, and an unsupported resource is dropped whether or not it
+// carries costs.
 func convertBreakdownResources(resources []*provider.Resource) (supported, free []dashboard.BreakdownResourceInput) {
 	for _, r := range resources {
-		if r.IsFree {
-			res, _, _ := convertBreakdownResource(r)
-			if r.IsSupported {
-				supported = append(supported, res)
-			} else {
-				free = append(free, res)
-			}
+		if !r.IsSupported && !r.IsFree {
 			continue
 		}
-		if !r.IsSupported {
-			continue
-		}
+
 		res, _, _ := convertBreakdownResource(r)
-		supported = append(supported, res)
+		if r.IsSupported {
+			supported = append(supported, res)
+		} else {
+			free = append(free, res)
+		}
 	}
 	return supported, free
+}
+
+// supportedResources keeps the resources that reach breakdown.resources, so the
+// diff describes the same set. A free resource the scanner marked supported
+// stays; an unsupported one belongs in freeResources, which a diff has no
+// equivalent of.
+func supportedResources(resources []*provider.Resource) []*provider.Resource {
+	out := make([]*provider.Resource, 0, len(resources))
+	for _, r := range resources {
+		if r.IsSupported {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// indexChildResources maps a resource's children by name, so a diff
+// sub-resource can be matched to the resource it came from.
+func indexChildResources(r *provider.Resource) map[string]*provider.Resource {
+	if r == nil {
+		return nil
+	}
+	return indexResources(r.ChildResources)
+}
+
+// indexResources maps resources by name, preferring the first list. A diff
+// resource names a resource that may exist only on one side of the comparison.
+func indexResources(lists ...[]*provider.Resource) map[string]*provider.Resource {
+	index := map[string]*provider.Resource{}
+	for _, list := range lists {
+		for _, r := range list {
+			if _, ok := index[r.Name]; !ok {
+				index[r.Name] = r
+			}
+		}
+	}
+	return index
 }
 
 // convertBreakdownResource returns the resource alongside its rolled-up hourly
@@ -362,21 +402,7 @@ func convertBreakdownResource(r *provider.Resource) (dashboard.BreakdownResource
 		}
 	}
 
-	if r.Tagging != nil {
-		for _, t := range r.Tagging.Tags {
-			if t.IsDefault {
-				if out.DefaultTags == nil {
-					out.DefaultTags = map[string]string{}
-				}
-				out.DefaultTags[t.Key] = t.Value
-				continue
-			}
-			if out.Tags == nil {
-				out.Tags = map[string]string{}
-			}
-			out.Tags[t.Key] = t.Value
-		}
-	}
+	out.Tags, out.DefaultTags = splitTags(r.Tagging)
 
 	hourlyCost := rat.Zero
 	monthlyCost := rat.Zero
@@ -438,23 +464,61 @@ func convertBreakdownCostComponent(c *provider.CostComponent) (dashboard.Breakdo
 	return out, hourlyCost, monthlyCost
 }
 
+// splitTags separates user tags from provider default tags, which the dashboard
+// reads as two fields.
+func splitTags(tagging *provider.Tagging) (tags, defaultTags map[string]string) {
+	if tagging == nil {
+		return nil, nil
+	}
+
+	for _, t := range tagging.Tags {
+		if t.IsDefault {
+			if defaultTags == nil {
+				defaultTags = map[string]string{}
+			}
+			defaultTags[t.Key] = t.Value
+			continue
+		}
+		if tags == nil {
+			tags = map[string]string{}
+		}
+		tags[t.Key] = t.Value
+	}
+
+	return tags, defaultTags
+}
+
 // convertDiffResources maps the comment package's diff resources onto the
 // upload shape. Their costs are deltas, so an hourly cost is derived from the
-// monthly one rather than summed from components.
-func convertDiffResources(resources []comment.BreakdownResource) []dashboard.BreakdownResourceInput {
+// monthly one rather than summed from components. byName supplies the type and
+// tags, which a diff resource does not carry.
+func convertDiffResources(resources []comment.BreakdownResource, byName map[string]*provider.Resource) []dashboard.BreakdownResourceInput {
 	if len(resources) == 0 {
 		return nil
 	}
 
 	out := make([]dashboard.BreakdownResourceInput, 0, len(resources))
 	for _, r := range resources {
+		// The comment treats any added or removed resource as changed so it can
+		// list it. An upload of one with no cost and no components would set the
+		// dashboard's has_diff on a zero-dollar change, which the runner's diff
+		// does not do.
 		monthlyCost := orZero(r.MonthlyCost)
+		if monthlyCost.IsZero() && len(r.CostComponents) == 0 && len(r.SubResources) == 0 {
+			continue
+		}
+
+		source := byName[r.Name]
 		dr := dashboard.BreakdownResourceInput{
 			Name:         r.Name,
-			Tags:         r.Tags,
 			HourlyCost:   monthlyCost.Div(rat.New(730)).String(),
 			MonthlyCost:  monthlyCost.String(),
-			SubResources: convertDiffResources(r.SubResources),
+			SubResources: convertDiffResources(r.SubResources, indexChildResources(source)),
+		}
+
+		if source != nil {
+			dr.ResourceType = source.Type
+			dr.Tags, dr.DefaultTags = splitTags(source.Tagging)
 		}
 
 		for _, c := range r.CostComponents {

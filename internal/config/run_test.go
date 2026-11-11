@@ -245,8 +245,6 @@ func TestBuildRunInput_RunQuotaDiagnosticFromBase(t *testing.T) {
 	assert.Equal(t, "200", input.ProjectResults[0].Breakdown.TotalMonthlyCost)
 }
 
-// priced returns a resource with a single monthly cost component, which is the
-// shape most of the breakdown assertions below need.
 func priced(name string, monthlyCost string) *provider.Resource {
 	return &provider.Resource{
 		Name:        name,
@@ -453,4 +451,72 @@ func TestBuildRunInput_DiffResourcesComponentsShiftedTotalUnchanged(t *testing.T
 	assert.Equal(t, "-6", diff.Resources[0].CostComponents[0].MonthlyCost)
 	assert.Equal(t, "Storage", diff.Resources[0].CostComponents[1].Name)
 	assert.Equal(t, "6", diff.Resources[0].CostComponents[1].MonthlyCost)
+}
+
+// The runner diffs and breaks down the same resource set, so a diff resource
+// carries the type and tags of the resource it was built from.
+func TestBuildRunInput_DiffResourceCarriesTypeAndTags(t *testing.T) {
+	base := priced("aws_instance.web", "10")
+	head := priced("aws_instance.web", "25")
+	head.Tagging = &provider.Tagging{
+		Tags: []*provider.Tag{
+			{Key: "env", Value: "prod"},
+			{Key: "owner", Value: "platform", IsDefault: true},
+		},
+	}
+
+	input := BuildRunInput(RunInputOptions{
+		BaseResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{Name: "project-a", Resources: []*provider.Resource{base}}},
+		},
+		HeadResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{Name: "project-a", Resources: []*provider.Resource{head}}},
+		},
+	})
+
+	diff := input.ProjectResults[0].Diff
+	require.NotNil(t, diff)
+	require.Len(t, diff.Resources, 1)
+
+	assert.Equal(t, "aws_instance", diff.Resources[0].ResourceType)
+	assert.Equal(t, map[string]string{"env": "prod"}, diff.Resources[0].Tags)
+	assert.Equal(t, map[string]string{"owner": "platform"}, diff.Resources[0].DefaultTags)
+}
+
+// An unsupported resource never reaches breakdown.resources, so it must not
+// reach diff.resources either, and an added free resource must not set has_diff
+// on a zero-dollar change.
+func TestBuildRunInput_DiffExcludesUnsupportedAndFreeResources(t *testing.T) {
+	tests := []struct {
+		name  string
+		added *provider.Resource
+	}{
+		{
+			name:  "unsupported resource",
+			added: &provider.Resource{Name: "aws_unknown.new", Type: "aws_unknown"},
+		},
+		{
+			name:  "free resource",
+			added: &provider.Resource{Name: "aws_iam_role.new", Type: "aws_iam_role", IsSupported: true, IsFree: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := priced("aws_instance.web", "10")
+
+			input := BuildRunInput(RunInputOptions{
+				BaseResult: &DirectoryResult{
+					Projects: []pkgscanner.ProjectResult{{Name: "project-a", Resources: []*provider.Resource{existing}}},
+				},
+				HeadResult: &DirectoryResult{
+					Projects: []pkgscanner.ProjectResult{{Name: "project-a", Resources: []*provider.Resource{existing, tt.added}}},
+				},
+			})
+
+			diff := input.ProjectResults[0].Diff
+			require.NotNil(t, diff)
+			assert.Empty(t, diff.Resources)
+		})
+	}
 }
