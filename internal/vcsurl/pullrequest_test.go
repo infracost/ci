@@ -480,3 +480,30 @@ func TestBitbucketProject(t *testing.T) {
 		})
 	}
 }
+
+func TestRepoSlug(t *testing.T) {
+	tests := []struct {
+		name    string
+		repoURL string
+		want    string
+	}{
+		{name: "github", repoURL: "https://github.com/infracost/actions", want: "github.com/infracost/actions"},
+		{name: "trims clone suffix", repoURL: "https://github.com/infracost/actions.git/", want: "github.com/infracost/actions"},
+		{name: "host case is normalised", repoURL: "https://GitHub.com/infracost/actions", want: "github.com/infracost/actions"},
+		{name: "path case is preserved", repoURL: "https://dev.azure.com/Infracost/My Project/_git/Repo", want: "dev.azure.com/Infracost/My Project/Repo"},
+		{name: "azure drops the _git segment", repoURL: "https://dev.azure.com/org/project/_git/repo", want: "dev.azure.com/org/project/repo"},
+		{name: "gitlab subgroups keep every level", repoURL: "https://gitlab.com/group/sub/repo", want: "gitlab.com/group/sub/repo"},
+		{name: "port is not part of the slug", repoURL: "https://ghes.corp:8443/infracost/actions", want: "ghes.corp/infracost/actions"},
+		{name: "userinfo is dropped", repoURL: "https://token@github.com/infracost/actions", want: "github.com/infracost/actions"},
+		{name: "no path", repoURL: "https://github.com", want: ""},
+		{name: "unparseable", repoURL: "::not a url::", want: ""},
+		{name: "empty", repoURL: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, RepoSlug(tt.repoURL))
+			assert.NotContains(t, RepoSlug(tt.repoURL), "token")
+		})
+	}
+}

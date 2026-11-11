@@ -213,6 +213,38 @@ func TrimRepoURL(repoURL string) string {
 	return strings.TrimSuffix(strings.TrimSuffix(repoURL, "/"), ".git")
 }
 
+// RepoSlug renders HOST/OWNER/REPO for telemetry, the same form `infracost ci
+// setup` registers, so a setup and the pipeline runs that follow join on one
+// key. Returns "" for a URL it cannot parse: this is a reporting value and
+// never a reason to fail a run.
+//
+// Userinfo is dropped, because a clone URL pasted into INFRACOST_VCS_REPOSITORY_URL
+// carries a token there. The host is lower-cased because only it is
+// case-insensitive; an Azure project name in the path is not.
+func RepoSlug(repoURL string) string {
+	u, err := url.Parse(TrimRepoURL(repoURL))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+
+	path := strings.Trim(u.Path, "/")
+	if path == "" {
+		return ""
+	}
+
+	// Azure Repos puts _git between the project and the repository. Dropping it
+	// gives org/project/repo, which is what setup derives from the same remote.
+	var segments []string
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "_git" {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+
+	return strings.ToLower(u.Hostname()) + "/" + strings.Join(segments, "/")
+}
+
 // vendorHost returns the vendor-hosted host a URL names, or "" when it cannot
 // be one. Hosts are case-insensitive and url.Parse does not normalise them; the
 // FQDN trailing dot goes too, or "github.com." would miss providerHosts.

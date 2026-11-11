@@ -8,6 +8,7 @@ import (
 	"time"
 
 	vcsmocks "github.com/infracost/ci/v2/internal/mocks/vcs"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 	"github.com/infracost/vcs/pkg/vcs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -157,6 +158,76 @@ func TestNextWait(t *testing.T) {
 					assert.Less(t, got, time.Duration(float64(tt.want)*1.2))
 				}
 			}
+		})
+	}
+}
+
+func TestPostHint(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		err      error
+		want     string
+	}{
+		{
+			name:     "a GitHub 403 names both token kinds",
+			provider: vcsurl.ProviderGitHub,
+			err:      &vcs.PostError{StatusCode: http.StatusForbidden},
+			want:     gitHubPermissionHint,
+		},
+		{
+			name:     "a GitHub 404 names the missing pull request before the permission",
+			provider: vcsurl.ProviderGitHub,
+			err:      &vcs.PostError{StatusCode: http.StatusNotFound},
+			want:     notFoundHint + gitHubPermissionHint,
+		},
+		{
+			name:     "a GitHub 401 is the token, not a permission",
+			provider: vcsurl.ProviderGitHub,
+			err:      &vcs.PostError{StatusCode: http.StatusUnauthorized},
+			want:     gitHubTokenHint,
+		},
+		{
+			name:     "a GitLab 403 names CI_JOB_TOKEN",
+			provider: vcsurl.ProviderGitLab,
+			err:      &vcs.PostError{StatusCode: http.StatusForbidden},
+			want:     gitLabPermissionHint,
+		},
+		{
+			name:     "a Bitbucket 401 is the token",
+			provider: vcsurl.ProviderBitbucket,
+			err:      &vcs.PostError{StatusCode: http.StatusUnauthorized},
+			want:     bitbucketTokenHint,
+		},
+		{
+			name:     "Azure keeps its own principal-aware hint",
+			provider: vcsurl.ProviderAzureRepos,
+			err:      &vcs.PostError{StatusCode: http.StatusForbidden, Op: vcs.OpCreate},
+			want:     azureContributeHint,
+		},
+		{
+			name:     "a rate limit says nothing about permissions",
+			provider: vcsurl.ProviderGitHub,
+			err:      &vcs.PostError{StatusCode: http.StatusTooManyRequests},
+			want:     "",
+		},
+		{
+			name:     "an error that is not a PostError says nothing",
+			provider: vcsurl.ProviderGitHub,
+			err:      errors.New("connection reset"),
+			want:     "",
+		},
+		{
+			name:     "an unsupported provider says nothing",
+			provider: "gitea",
+			err:      &vcs.PostError{StatusCode: http.StatusForbidden},
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, postHint(tt.provider, &diffArgs{}, tt.err))
 		})
 	}
 }

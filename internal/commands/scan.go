@@ -59,6 +59,7 @@ func scan(cfg *config.Config, args *scanArgs) error {
 	if args.repoURL == "" {
 		return fmt.Errorf("cannot determine the repository URL: set INFRACOST_VCS_REPOSITORY_URL")
 	}
+	registerRepoSlug(args.repoURL)
 
 	// A bad value fails here; an absent one is only fatal for the upload, so
 	// the error is kept rather than returned.

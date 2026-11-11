@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/infracost/ci/v2/internal/api/events"
+	"github.com/infracost/ci/v2/internal/vcsurl"
 )
 
 // Inferences records what a platform supplied and what the environment kept,
@@ -108,6 +109,14 @@ func InferVCS(cfg *Config) Inferences {
 	return record
 }
 
+// InfersPullRequest reports whether the detected platform supplies the pull
+// request number itself. Every platform platformValues handles does, so a run
+// on one of them that still has no pull request is a branch or push pipeline,
+// not a missing variable.
+func InfersPullRequest() bool {
+	return platformValues(events.CIPlatform()) != nil
+}
+
 // add classifies one field: set by the environment, or filled from the
 // platform. A gap on both sides is not worth reporting.
 func (i *Inferences) add(name string, fromEnv, fromPlatform bool) {
@@ -147,6 +156,10 @@ func platformValues(platform string) *vcsValues {
 		return bitbucketValues()
 	case "jenkins":
 		return jenkinsValues()
+	case "circleci":
+		return circleCIValues()
+	case "buildkite":
+		return buildkiteValues()
 	// getCIPlatform interpolates BUILD_REPOSITORY_PROVIDER raw, so the real
 	// values are azure_devops_TfsGit and azure_devops_GitHub.
 	case "azure_devops_tfsgit":
@@ -191,6 +204,71 @@ func bitbucketValues() *vcsValues {
 		baseBranch:    os.Getenv("BITBUCKET_PR_DESTINATION_BRANCH"),
 		pipelineRunID: os.Getenv("BITBUCKET_BUILD_NUMBER"),
 	}
+}
+
+// circleCIValues reads the predefined CIRCLE_* set. Provider stays the user's:
+// CircleCI names no host, and CIRCLE_REPOSITORY_URL is a clone URL whose host
+// is the VCS host but whose form is not the dashboard's web URL.
+func circleCIValues() *vcsValues {
+	return &vcsValues{
+		// Only the number is inferred: CIRCLE_PULL_REQUEST is a web URL, but
+		// the URL the dashboard keys on is rebuilt from the repository URL and
+		// this number, so the two can differ on a self-hosted VCS host.
+		prNumber: circleCIPRNumber(),
+		// The login of whoever triggered the build. Absent on a build from a
+		// forked repository, which leaves the field the user's.
+		author:        os.Getenv("CIRCLE_USERNAME"),
+		branch:        os.Getenv("CIRCLE_BRANCH"),
+		pipelineRunID: firstNonEmpty(os.Getenv("CIRCLE_WORKFLOW_ID"), os.Getenv("CIRCLE_BUILD_NUM")),
+	}
+}
+
+// circleCIPRNumber takes the number from CIRCLE_PR_NUMBER, which is set only
+// on a forked pull request, and otherwise from the last segment of the pull
+// request URL, which is set on every pull request build.
+func circleCIPRNumber() int {
+	if number := envInt("CIRCLE_PR_NUMBER"); number != 0 {
+		return number
+	}
+
+	prURL := strings.TrimSuffix(os.Getenv("CIRCLE_PULL_REQUEST"), "/")
+	if prURL == "" {
+		return 0
+	}
+
+	number, err := strconv.Atoi(prURL[strings.LastIndex(prURL, "/")+1:])
+	if err != nil || number < 0 {
+		return 0
+	}
+	return number
+}
+
+// buildkiteValues reads the predefined BUILDKITE_* set. BUILDKITE_REPO is a
+// clone URL, so the repository URL stays the user's; the provider does not,
+// because Buildkite names it outright.
+func buildkiteValues() *vcsValues {
+	return &vcsValues{
+		provider: buildkiteProviders[strings.ToLower(os.Getenv("BUILDKITE_PIPELINE_PROVIDER"))],
+		// "false" on a branch build, which envInt reads as no pull request.
+		prNumber: envInt("BUILDKITE_PULL_REQUEST"),
+		// The commit author's name, since Buildkite names no VCS login.
+		author:        os.Getenv("BUILDKITE_BUILD_AUTHOR"),
+		branch:        os.Getenv("BUILDKITE_BRANCH"),
+		baseBranch:    os.Getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH"),
+		pipelineRunID: os.Getenv("BUILDKITE_BUILD_NUMBER"),
+	}
+}
+
+// buildkiteProviders maps BUILDKITE_PIPELINE_PROVIDER onto the provider
+// contract. A provider not listed infers nothing, leaving the field the
+// user's.
+var buildkiteProviders = map[string]string{
+	"github":            vcsurl.ProviderGitHub,
+	"github_enterprise": vcsurl.ProviderGitHub,
+	"gitlab":            vcsurl.ProviderGitLab,
+	"gitlab_enterprise": vcsurl.ProviderGitLab,
+	"bitbucket":         vcsurl.ProviderBitbucket,
+	"bitbucket_server":  vcsurl.ProviderBitbucket,
 }
 
 // jenkinsValues reads the multibranch CHANGE_* set. Provider and repository

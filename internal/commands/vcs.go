@@ -21,6 +21,10 @@ func resolvePullRequest(provider, repoURL, prURL string, prNumber int) (string, 
 	prURL = strings.TrimSuffix(prURL, "/")
 
 	if prURL == "" && prNumber <= 0 {
+		// Warned, not wrapped: the returned error is pushed as an
+		// infracost-error event, and a multi-line snippet both groups badly
+		// there and does not belong in every one of them.
+		logging.Warnf("%s", missingPullRequestHint())
 		return "", 0, fmt.Errorf("cannot determine the pull request: set INFRACOST_VCS_PULL_REQUEST_ID or INFRACOST_VCS_PULL_REQUEST_URL")
 	}
 
@@ -30,6 +34,7 @@ func resolvePullRequest(provider, repoURL, prURL string, prNumber int) (string, 
 			return "", 0, err
 		}
 		if built == "" {
+			logging.Warnf("%s", envSnippet("INFRACOST_VCS_REPOSITORY_URL"))
 			return "", 0, fmt.Errorf("cannot determine the pull request URL: set INFRACOST_VCS_REPOSITORY_URL")
 		}
 		return built, prNumber, nil

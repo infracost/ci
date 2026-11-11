@@ -53,11 +53,13 @@ const (
 	// from whatever is in front of the dashboard and is not bounded.
 	maxErrorBody = 1024
 
-	// CLITokenHint names the screen that issues a CI v2 token. Exported so the
-	// config-time check and this package give the same instruction. No host: the
-	// dashboard endpoint is per-environment, and a prod URL misdirects a dev run.
-	CLITokenHint = "in your Infracost dashboard, Organization settings → CLI tokens " +
-		"→ Create CLI v2 tokens. Set it as INFRACOST_CLI_AUTHENTICATION_TOKEN"
+	// CLITokenHint names the page that issues a CI v2 token. Exported so the
+	// config-time check and this package give the same instruction. The org
+	// slug is a placeholder: nothing here has reached the dashboard, so no run
+	// knows which org it belongs to.
+	CLITokenHint = "https://dashboard.infracost.io/org/<your-org>/settings/cli-tokens " +
+		"(Organization settings → CLI tokens → Create CLI v2 token). " +
+		"Set it as INFRACOST_CLI_AUTHENTICATION_TOKEN"
 )
 
 func (e *StatusError) Error() string {

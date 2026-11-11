@@ -18,6 +18,14 @@ import (
 // web URL is bitbucket.org; the API lives on its own host.
 const bitbucketCloudAPIURL = "https://api.bitbucket.org/2.0"
 
+// Bitbucket hint texts, named when a post failed on the token or its scopes.
+const (
+	bitbucketDocsURL   = "https://www.infracost.io/docs/integrations/bitbucket_pipelines/"
+	bitbucketTokenHint = "the Bitbucket token is invalid or expired: set BITBUCKET_TOKEN, or --bitbucket-token, to <username>:<app password> on Cloud, or to a personal access token on Server. This is not a permission problem: see " + bitbucketDocsURL
+	// Cloud and Server name their permissions differently, so both are given.
+	bitbucketPermissionHint = "the Bitbucket token cannot comment on this pull request: a Cloud app password needs Pull requests: Write and Repositories: Read, and a Server personal access token needs repository Write: see " + bitbucketDocsURL
+)
+
 // fillBitbucketPullRequest fills the title and author Bitbucket Pipelines has
 // no predefined variable for, the way fillAzurePullRequest does for Azure.
 //

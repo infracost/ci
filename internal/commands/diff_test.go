@@ -81,7 +81,9 @@ func TestResolveDiffContext_RequiresBuildablePullRequestURL(t *testing.T) {
 			_, err := resolveDiffContext(context.Background(), cfg, args)
 
 			require.Error(t, err)
-			assert.EqualError(t, err, tt.wantErr)
+			// Contains, not EqualError: these messages carry a pasteable
+			// snippet whose syntax depends on the platform the tests run on.
+			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }
