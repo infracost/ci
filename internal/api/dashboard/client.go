@@ -68,7 +68,7 @@ type RunError struct {
 
 // ProjectResultInput represents a single project's cost data for addRun.
 type ProjectResultInput struct {
-	ProjectName         string                    `json:"projectName"`
+	ProjectName string `json:"projectName"`
 	// Breakdown is nil for a project that was never priced, so the dashboard
 	// keeps its last recorded cost instead of storing a zero.
 	Breakdown           *BreakdownInput           `json:"breakdown,omitempty"`
@@ -206,7 +206,42 @@ type BreakdownInput struct {
 	TotalMonthlyCost            string                   `json:"totalMonthlyCost"`
 	TotalMonthlyUsageCost       string                   `json:"totalMonthlyUsageCost,omitempty"`
 	TotalMonthlyCarbonGramsCo2e string                   `json:"totalMonthlyCarbonGramsCo2e,omitempty"`
-	Resources                   []map[string]interface{} `json:"resources,omitempty"`
+	Resources                   []BreakdownResourceInput `json:"resources,omitempty"`
+	FreeResources               []BreakdownResourceInput `json:"freeResources,omitempty"`
+}
+
+// BreakdownResourceInput is a resource in the Infracost output format the
+// dashboard reads, not the provider proto's wire shape.
+type BreakdownResourceInput struct {
+	Name           string                          `json:"name"`
+	ResourceType   string                          `json:"resourceType,omitempty"`
+	Metadata       *BreakdownResourceMetadataInput `json:"metadata,omitempty"`
+	Tags           map[string]string               `json:"tags,omitempty"`
+	DefaultTags    map[string]string               `json:"defaultTags,omitempty"`
+	HourlyCost     string                          `json:"hourlyCost,omitempty"`
+	MonthlyCost    string                          `json:"monthlyCost,omitempty"`
+	CostComponents []BreakdownCostComponentInput   `json:"costComponents,omitempty"`
+	SubResources   []BreakdownResourceInput        `json:"subresources,omitempty"`
+}
+
+// BreakdownResourceMetadataInput holds the deep checksum the dashboard stores
+// as a finops policy resource's parserChecksum.
+type BreakdownResourceMetadataInput struct {
+	Checksum            string `json:"checksum"`
+	DefaultTagsChecksum string `json:"defaultTagsChecksum,omitempty"`
+}
+
+// BreakdownCostComponentInput represents a cost component within a breakdown
+// resource.
+type BreakdownCostComponentInput struct {
+	Name            string `json:"name"`
+	Unit            string `json:"unit"`
+	Price           string `json:"price"`
+	HourlyCost      string `json:"hourlyCost"`
+	MonthlyCost     string `json:"monthlyCost"`
+	HourlyQuantity  string `json:"hourlyQuantity"`
+	MonthlyQuantity string `json:"monthlyQuantity"`
+	UsageBased      bool   `json:"usageBased,omitempty"`
 }
 
 // BudgetResultInput represents a budget evaluation result.
