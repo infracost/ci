@@ -307,8 +307,8 @@ func buildDiffBreakdownInput(base, head *pkgscanner.ProjectResult) dashboard.Bre
 	baseCost := orZero(base.TotalMonthlyCost)
 	diffCost := headCost.Sub(baseCost)
 
-	// The same comparison the PR comment uses, over the same filtered set the
-	// breakdown gets, so the uploaded diff and the comment cannot disagree.
+	// The same comparison the PR comment uses, but over the supported set only,
+	// to match breakdown.resources.
 	pastBreakdown := buildCostBreakdown(supportedResources(base.Resources))
 	currentBreakdown := buildCostBreakdown(supportedResources(head.Resources))
 
@@ -316,7 +316,7 @@ func buildDiffBreakdownInput(base, head *pkgscanner.ProjectResult) dashboard.Bre
 	if diff := diffCostBreakdown(pastBreakdown, currentBreakdown); diff != nil {
 		// A diff resource carries only a name and costs, so type and tags come from
 		// the source resource: head first, then base for a removed one.
-		resources = convertDiffResources(diff.Resources, indexResources(head.Resources, base.Resources))
+		resources = convertDiffResources(diff.Resources, indexResources(head.Resources), indexResources(base.Resources))
 	}
 
 	return dashboard.BreakdownInput{
@@ -365,15 +365,12 @@ func indexChildResources(r *provider.Resource) map[string]*provider.Resource {
 	return indexResources(r.ChildResources)
 }
 
-// indexResources maps resources by name, preferring the first list. A diff
-// resource names a resource that may exist only on one side of the comparison.
-func indexResources(lists ...[]*provider.Resource) map[string]*provider.Resource {
-	index := map[string]*provider.Resource{}
-	for _, list := range lists {
-		for _, r := range list {
-			if _, ok := index[r.Name]; !ok {
-				index[r.Name] = r
-			}
+// indexResources maps resources by name, keeping the first of a repeated name.
+func indexResources(resources []*provider.Resource) map[string]*provider.Resource {
+	index := make(map[string]*provider.Resource, len(resources))
+	for _, r := range resources {
+		if _, ok := index[r.Name]; !ok {
+			index[r.Name] = r
 		}
 	}
 	return index
@@ -481,8 +478,8 @@ func splitTags(tagging *provider.Tagging) (tags, defaultTags map[string]string) 
 }
 
 // convertDiffResources maps diff resources onto the upload shape. Their costs are
-// deltas, so hourly derives from monthly; byName supplies the type and tags.
-func convertDiffResources(resources []comment.BreakdownResource, byName map[string]*provider.Resource) []dashboard.BreakdownResourceInput {
+// deltas, so hourly derives from monthly; head and base supply the type and tags.
+func convertDiffResources(resources []comment.BreakdownResource, head, base map[string]*provider.Resource) []dashboard.BreakdownResourceInput {
 	if len(resources) == 0 {
 		return nil
 	}
@@ -496,12 +493,16 @@ func convertDiffResources(resources []comment.BreakdownResource, byName map[stri
 			continue
 		}
 
-		source := byName[r.Name]
+		source := head[r.Name]
+		if source == nil {
+			source = base[r.Name]
+		}
+
 		dr := dashboard.BreakdownResourceInput{
 			Name:         r.Name,
 			HourlyCost:   monthlyCost.Div(rat.New(730)).String(),
 			MonthlyCost:  monthlyCost.String(),
-			SubResources: convertDiffResources(r.SubResources, indexChildResources(source)),
+			SubResources: convertDiffResources(r.SubResources, indexChildResources(head[r.Name]), indexChildResources(base[r.Name])),
 		}
 
 		if source != nil {

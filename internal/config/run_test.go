@@ -557,7 +557,6 @@ func TestBuildRunInput_DiffRemovedSubResourceCarriesTypeAndTags(t *testing.T) {
 	assert.Equal(t, map[string]string{"env": "prod"}, sub.Tags)
 	assert.Equal(t, map[string]string{"owner": "platform"}, sub.DefaultTags)
 }
-
 </merged><merged>
 package config
 
