@@ -520,3 +520,40 @@ func TestBuildRunInput_DiffExcludesUnsupportedAndFreeResources(t *testing.T) {
 		})
 	}
 }
+
+// A sub-resource removed from a resource that still exists only appears in the
+// base, so its type and tags must be recovered from there. See TRK-1542.
+func TestBuildRunInput_DiffRemovedSubResourceCarriesTypeAndTags(t *testing.T) {
+	base := priced("aws_instance.web", "10")
+	removed := priced("root_block_device", "5")
+	removed.Type = "aws_ebs_volume"
+	removed.Tagging = &provider.Tagging{
+		Tags: []*provider.Tag{
+			{Key: "env", Value: "prod"},
+			{Key: "owner", Value: "platform", IsDefault: true},
+		},
+	}
+	base.ChildResources = []*provider.Resource{removed}
+
+	head := priced("aws_instance.web", "10")
+
+	input := BuildRunInput(RunInputOptions{
+		BaseResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{Name: "project-a", Resources: []*provider.Resource{base}}},
+		},
+		HeadResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{Name: "project-a", Resources: []*provider.Resource{head}}},
+		},
+	})
+
+	diff := input.ProjectResults[0].Diff
+	require.NotNil(t, diff)
+	require.Len(t, diff.Resources, 1)
+	require.Len(t, diff.Resources[0].SubResources, 1)
+
+	sub := diff.Resources[0].SubResources[0]
+	assert.Equal(t, "root_block_device", sub.Name)
+	assert.Equal(t, "aws_ebs_volume", sub.ResourceType)
+	assert.Equal(t, map[string]string{"env": "prod"}, sub.Tags)
+	assert.Equal(t, map[string]string{"owner": "platform"}, sub.DefaultTags)
+}
