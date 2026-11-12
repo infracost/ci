@@ -1,0 +1,149 @@
+{
+  "breakdown": {
+    "totalHourlyCost": "0.043835616438356165",
+    "totalMonthlyCost": "32",
+    "resources": [
+      {
+        "name": "aws_instance.web",
+        "resourceType": "aws_instance",
+        "metadata": {
+          "checksum": "deep-aws_instance.web",
+          "defaultTagsChecksum": "tags-aws_instance.web"
+        },
+        "tags": {
+          "env": "prod"
+        },
+        "defaultTags": {
+          "owner": "platform"
+        },
+        "hourlyCost": "0.03424657534246575",
+        "monthlyCost": "25",
+        "costComponents": [
+          {
+            "name": "Compute",
+            "unit": "hours",
+            "price": "25",
+            "hourlyCost": "0.03424657534246575",
+            "monthlyCost": "25",
+            "hourlyQuantity": "0.0013698630136986301",
+            "monthlyQuantity": "1"
+          }
+        ]
+      },
+      {
+        "name": "aws_instance.new",
+        "resourceType": "aws_instance",
+        "metadata": {
+          "checksum": "deep-aws_instance.new",
+          "defaultTagsChecksum": "tags-aws_instance.new"
+        },
+        "hourlyCost": "0.009589041095890411",
+        "monthlyCost": "7",
+        "costComponents": [
+          {
+            "name": "Compute",
+            "unit": "hours",
+            "price": "7",
+            "hourlyCost": "0.009589041095890411",
+            "monthlyCost": "7",
+            "hourlyQuantity": "0.0013698630136986301",
+            "monthlyQuantity": "1"
+          }
+        ]
+      }
+    ],
+    "freeResources": [
+      {
+        "name": "aws_iam_role.app",
+        "resourceType": "aws_iam_role",
+        "hourlyCost": "0",
+        "monthlyCost": "0"
+      }
+    ]
+  },
+  "diff": {
+    "totalHourlyCost": "-0.00410958904109589",
+    "totalMonthlyCost": "-3",
+    "resources": [
+      {
+        "name": "aws_instance.web",
+        "resourceType": "aws_instance",
+        "tags": {
+          "env": "prod"
+        },
+        "defaultTags": {
+          "owner": "platform"
+        },
+        "hourlyCost": "0.0136986301369863",
+        "monthlyCost": "10",
+        "costComponents": [
+          {
+            "name": "Compute",
+            "unit": "hours",
+            "price": "15",
+            "hourlyCost": "0.02054794520547945",
+            "monthlyCost": "15",
+            "hourlyQuantity": "0",
+            "monthlyQuantity": "0"
+          }
+        ],
+        "subresources": [
+          {
+            "name": "root_block_device",
+            "resourceType": "aws_ebs_volume",
+            "tags": {
+              "env": "prod"
+            },
+            "hourlyCost": "-0.00684931506849315",
+            "monthlyCost": "-5",
+            "costComponents": [
+              {
+                "name": "Compute",
+                "unit": "hours",
+                "price": "-5",
+                "hourlyCost": "-0.00684931506849315",
+                "monthlyCost": "-5",
+                "hourlyQuantity": "-0.0013698630136986301",
+                "monthlyQuantity": "-1"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "aws_instance.api",
+        "resourceType": "aws_instance",
+        "hourlyCost": "-0.0273972602739726",
+        "monthlyCost": "-20",
+        "costComponents": [
+          {
+            "name": "Compute",
+            "unit": "hours",
+            "price": "-20",
+            "hourlyCost": "-0.0273972602739726",
+            "monthlyCost": "-20",
+            "hourlyQuantity": "-0.0013698630136986301",
+            "monthlyQuantity": "-1"
+          }
+        ]
+      },
+      {
+        "name": "aws_instance.new",
+        "resourceType": "aws_instance",
+        "hourlyCost": "0.009589041095890411",
+        "monthlyCost": "7",
+        "costComponents": [
+          {
+            "name": "Compute",
+            "unit": "hours",
+            "price": "7",
+            "hourlyCost": "0.009589041095890411",
+            "monthlyCost": "7",
+            "hourlyQuantity": "0.0013698630136986301",
+            "monthlyQuantity": "1"
+          }
+        ]
+      }
+    ]
+  }
+}
