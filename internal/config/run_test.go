@@ -557,3 +557,73 @@ func TestBuildRunInput_DiffRemovedSubResourceCarriesTypeAndTags(t *testing.T) {
 	assert.Equal(t, map[string]string{"env": "prod"}, sub.Tags)
 	assert.Equal(t, map[string]string{"owner": "platform"}, sub.DefaultTags)
 }
+
+// An added resource whose only children are themselves zero-cost must not reach
+// the diff, or the dashboard sets has_diff on a zero-dollar change. See TRK-1542.
+func TestBuildRunInput_DiffExcludesZeroCostResourceWithZeroCostChildren(t *testing.T) {
+	zero := &provider.Resource{Name: "aws_thing.zero", Type: "aws_thing", IsSupported: true}
+	zero.ChildResources = []*provider.Resource{
+		{Name: "zero_child", Type: "aws_thing_child", IsSupported: true},
+	}
+
+	input := BuildRunInput(RunInputOptions{
+		BaseResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{
+				Name:      "project-a",
+				Resources: []*provider.Resource{priced("aws_instance.web", "10")},
+			}},
+		},
+		HeadResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{
+				Name:      "project-a",
+				Resources: []*provider.Resource{priced("aws_instance.web", "25"), zero},
+			}},
+		},
+	})
+
+	diff := input.ProjectResults[0].Diff
+	require.NotNil(t, diff)
+
+	names := make([]string, 0, len(diff.Resources))
+	for _, r := range diff.Resources {
+		names = append(names, r.Name)
+	}
+	assert.Equal(t, []string{"aws_instance.web"}, names)
+}
+
+// The diff is built from the supported resources, so its type and tags must be
+// indexed over the same set, not the unfiltered one. See TRK-1542.
+func TestBuildRunInput_DiffIgnoresUnsupportedResourceSharingAName(t *testing.T) {
+	head := priced("aws_instance.web", "25")
+	head.Tagging = &provider.Tagging{Tags: []*provider.Tag{{Key: "env", Value: "prod"}}}
+
+	// Same name, unsupported, later in the list: never in the breakdown, so it
+	// must not supply the diff resource's type or tags either.
+	shadow := &provider.Resource{
+		Name:    "aws_instance.web",
+		Type:    "aws_unknown",
+		Tagging: &provider.Tagging{Tags: []*provider.Tag{{Key: "env", Value: "shadow"}}},
+	}
+
+	input := BuildRunInput(RunInputOptions{
+		BaseResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{
+				Name:      "project-a",
+				Resources: []*provider.Resource{priced("aws_instance.web", "10")},
+			}},
+		},
+		HeadResult: &DirectoryResult{
+			Projects: []pkgscanner.ProjectResult{{
+				Name:      "project-a",
+				Resources: []*provider.Resource{head, shadow},
+			}},
+		},
+	})
+
+	diff := input.ProjectResults[0].Diff
+	require.NotNil(t, diff)
+	require.Len(t, diff.Resources, 1)
+
+	assert.Equal(t, "aws_instance", diff.Resources[0].ResourceType)
+	assert.Equal(t, map[string]string{"env": "prod"}, diff.Resources[0].Tags)
+}

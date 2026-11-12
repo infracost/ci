@@ -309,14 +309,16 @@ func buildDiffBreakdownInput(base, head *pkgscanner.ProjectResult) dashboard.Bre
 
 	// The same comparison the PR comment uses, but over the supported set only,
 	// to match breakdown.resources.
-	pastBreakdown := buildCostBreakdown(supportedResources(base.Resources))
-	currentBreakdown := buildCostBreakdown(supportedResources(head.Resources))
+	baseSupported := supportedResources(base.Resources)
+	headSupported := supportedResources(head.Resources)
+	pastBreakdown := buildCostBreakdown(baseSupported)
+	currentBreakdown := buildCostBreakdown(headSupported)
 
 	var resources []dashboard.BreakdownResourceInput
 	if diff := diffCostBreakdown(pastBreakdown, currentBreakdown); diff != nil {
 		// A diff resource carries only a name and costs, so type and tags come from
 		// the source resource: head first, then base for a removed one.
-		resources = convertDiffResources(diff.Resources, indexResources(head.Resources), indexResources(base.Resources))
+		resources = convertDiffResources(diff.Resources, indexResources(headSupported), indexResources(baseSupported))
 	}
 
 	return dashboard.BreakdownInput{
@@ -365,13 +367,12 @@ func indexChildResources(r *provider.Resource) map[string]*provider.Resource {
 	return indexResources(r.ChildResources)
 }
 
-// indexResources maps resources by name, keeping the first of a repeated name.
+// indexResources maps resources by name, keeping the last of a repeated name as
+// indexBreakdownResources does, so the costs and the tags come from one resource.
 func indexResources(resources []*provider.Resource) map[string]*provider.Resource {
 	index := make(map[string]*provider.Resource, len(resources))
 	for _, r := range resources {
-		if _, ok := index[r.Name]; !ok {
-			index[r.Name] = r
-		}
+		index[r.Name] = r
 	}
 	return index
 }
@@ -486,10 +487,12 @@ func convertDiffResources(resources []comment.BreakdownResource, head, base map[
 
 	out := make([]dashboard.BreakdownResourceInput, 0, len(resources))
 	for _, r := range resources {
-		// The comment lists any added or removed resource as changed. Uploading a
-		// zero-dollar one would set the dashboard's has_diff; the runner's does not.
+		// Children convert first, so a dropped one cannot keep a zero-dollar parent
+		// alive and set the dashboard's has_diff, which the runner's diff does not.
+		subResources := convertDiffResources(r.SubResources, indexChildResources(head[r.Name]), indexChildResources(base[r.Name]))
+
 		monthlyCost := orZero(r.MonthlyCost)
-		if monthlyCost.IsZero() && len(r.CostComponents) == 0 && len(r.SubResources) == 0 {
+		if monthlyCost.IsZero() && len(r.CostComponents) == 0 && len(subResources) == 0 {
 			continue
 		}
 
@@ -502,7 +505,7 @@ func convertDiffResources(resources []comment.BreakdownResource, head, base map[
 			Name:         r.Name,
 			HourlyCost:   monthlyCost.Div(rat.New(730)).String(),
 			MonthlyCost:  monthlyCost.String(),
-			SubResources: convertDiffResources(r.SubResources, indexChildResources(head[r.Name]), indexChildResources(base[r.Name])),
+			SubResources: subResources,
 		}
 
 		if source != nil {
