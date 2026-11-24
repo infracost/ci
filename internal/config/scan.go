@@ -9,6 +9,7 @@ import (
 
 	"github.com/infracost/ci/v2/internal/api/dashboard"
 	"github.com/infracost/ci/v2/internal/trace"
+	"github.com/infracost/cli/pkg/logging"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	repoconfig "github.com/infracost/config"
 	gorat "github.com/infracost/go-proto/pkg/rat"
@@ -249,6 +250,7 @@ func (config *Config) ScanDirectory(ctx context.Context, dir string, accessToken
 				previous:    previousAddresses[project.Name],
 			}))
 			if errors.Is(err, pkgscanner.ErrProjectSkipped) {
+				logging.Debugf("skipping project %q: AI plugins are off for this org", project.Name)
 				continue
 			}
 			if err != nil {

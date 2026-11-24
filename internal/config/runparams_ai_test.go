@@ -12,9 +12,10 @@ func TestParseRunParametersAIEnabled(t *testing.T) {
 		featureFlags string
 		want         bool
 	}{
-		"no feature flags": {"", false},
-		"AI plugin off":    {`{"enableAiPlugin":false}`, false},
-		"AI plugin on":     {`{"enableAiPlugin":true}`, true},
+		"no feature flags":   {"", false},
+		"null feature flags": {"null", false},
+		"AI plugin off":      {`{"enableAiPlugin":false}`, false},
+		"AI plugin on":       {`{"enableAiPlugin":true}`, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			parsed, err := ParseRunParameters(dashboard.RunParameters{FeatureFlags: json.RawMessage(tc.featureFlags)})
