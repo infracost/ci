@@ -653,7 +653,7 @@ func checkBlockingViolations(data comment.Data, guardrails []*event.Guardrail, r
 
 	// Build a set of policy slugs that were already failing in the base branch.
 	previouslyFailing := make(map[string]bool)
-	for _, policies := range [][]*provider.FinopsPolicyResult{data.PreviousFinOpsPolicyResults, data.PreviousSecurityPolicyResults} {
+	for _, policies := range [][]*provider.FinopsPolicyResult{data.PreviousFinOpsPolicyResults, data.PreviousSecurityPolicyResults, data.PreviousAIPolicyResults} {
 		for _, p := range policies {
 			if len(p.FailingResources) > 0 {
 				previouslyFailing[p.PolicySlug] = true
@@ -661,8 +661,8 @@ func checkBlockingViolations(data comment.Data, guardrails []*event.Guardrail, r
 		}
 	}
 
-	// Check policies (FinOps + Security) for new blocking failures.
-	for _, policies := range [][]*provider.FinopsPolicyResult{data.FinOpsPolicyResults, data.SecurityPolicyResults} {
+	// Check policies (FinOps + Security + AI) for new blocking failures.
+	for _, policies := range [][]*provider.FinopsPolicyResult{data.FinOpsPolicyResults, data.SecurityPolicyResults, data.AIPolicyResults} {
 		for _, p := range policies {
 			if p.BlockPullRequest && len(p.FailingResources) > 0 && !previouslyFailing[p.PolicySlug] {
 				results.BlockPR = true

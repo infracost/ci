@@ -152,8 +152,8 @@ func BuildCommentData(opts CommentDataOptions) comment.Data {
 		policyGroupBySlug[s.Slug] = s.Group
 	}
 
-	finopsPolicies, securityPolicies := splitPolicyResults(allFinops, policyGroupBySlug)
-	prevFinopsPolicies, prevSecurityPolicies := splitPolicyResults(allPrevFinops, policyGroupBySlug)
+	finopsPolicies, securityPolicies, aiPolicies := splitPolicyResults(allFinops, policyGroupBySlug)
+	prevFinopsPolicies, prevSecurityPolicies, prevAIPolicies := splitPolicyResults(allPrevFinops, policyGroupBySlug)
 
 	// The head scan is what this PR is reporting on, so its limit message wins.
 	runQuotaMessage := headResult.RunQuotaMessage
@@ -182,6 +182,8 @@ func BuildCommentData(opts CommentDataOptions) comment.Data {
 		PreviousFinOpsPolicyResults:     prevFinopsPolicies,
 		SecurityPolicyResults:           securityPolicies,
 		PreviousSecurityPolicyResults:   prevSecurityPolicies,
+		AIPolicyResults:                 aiPolicies,
+		PreviousAIPolicyResults:         prevAIPolicies,
 		TaggingPolicyResults:            allTagging,
 		PreviousTaggingPolicyResults:    allPrevTagging,
 		GuardrailResults:                opts.GuardrailResults,
@@ -191,19 +193,19 @@ func BuildCommentData(opts CommentDataOptions) comment.Data {
 	}
 }
 
-func splitPolicyResults(finops []*provider.FinopsPolicyResult, slugs map[string]event.FinopsPolicySettings_Group) ([]*provider.FinopsPolicyResult, []*provider.FinopsPolicyResult) {
-	var securityPolicies []*provider.FinopsPolicyResult
-	var finopsPolicies []*provider.FinopsPolicyResult
+func splitPolicyResults(finops []*provider.FinopsPolicyResult, slugs map[string]event.FinopsPolicySettings_Group) (finopsPolicies, securityPolicies, aiPolicies []*provider.FinopsPolicyResult) {
 	for _, finop := range finops {
 		switch slugs[finop.PolicySlug] {
 		case event.FinopsPolicySettings_CLOUD_SECURITY:
 			securityPolicies = append(securityPolicies, finop)
+		case event.FinopsPolicySettings_AI:
+			aiPolicies = append(aiPolicies, finop)
 		default:
 			// default to finops policies if we get something unspecified
 			finopsPolicies = append(finopsPolicies, finop)
 		}
 	}
-	return finopsPolicies, securityPolicies
+	return finopsPolicies, securityPolicies, aiPolicies
 }
 
 func orZero(r *rat.Rat) *rat.Rat {

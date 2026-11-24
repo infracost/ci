@@ -80,6 +80,11 @@ func (f *fileVCS) SourceLink(_, _, _ string, _ int) string {
 	return ""
 }
 
+// PostAnnotations does nothing: a file has no diff lines to pin them to.
+func (f *fileVCS) PostAnnotations(_ context.Context, _ []comment.Annotation, _ []string) (vcs.AnnotationResult, error) {
+	return vcs.AnnotationResult{SkipReason: "annotations are not supported when the comment is written to a file"}, nil
+}
+
 // addTags applies the tag each provider adds inside its own PostComment.
 // Without it the job that posts the file leaves a comment no later run can
 // find, so every run adds another one.

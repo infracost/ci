@@ -161,6 +161,78 @@ func (_c *MockVCS_MaxCommentSize_Call) RunAndReturn(run func() (int, comment.Siz
 	return _c
 }
 
+// PostAnnotations provides a mock function for the type MockVCS
+func (_mock *MockVCS) PostAnnotations(ctx context.Context, annotations []comment.Annotation, failingKeys []string) (vcs.AnnotationResult, error) {
+	ret := _mock.Called(ctx, annotations, failingKeys)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PostAnnotations")
+	}
+
+	var r0 vcs.AnnotationResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []comment.Annotation, []string) (vcs.AnnotationResult, error)); ok {
+		return returnFunc(ctx, annotations, failingKeys)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []comment.Annotation, []string) vcs.AnnotationResult); ok {
+		r0 = returnFunc(ctx, annotations, failingKeys)
+	} else {
+		r0 = ret.Get(0).(vcs.AnnotationResult)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, []comment.Annotation, []string) error); ok {
+		r1 = returnFunc(ctx, annotations, failingKeys)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockVCS_PostAnnotations_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PostAnnotations'
+type MockVCS_PostAnnotations_Call struct {
+	*mock.Call
+}
+
+// PostAnnotations is a helper method to define mock.On call
+//   - ctx context.Context
+//   - annotations []comment.Annotation
+//   - failingKeys []string
+func (_e *MockVCS_Expecter) PostAnnotations(ctx any, annotations any, failingKeys any) *MockVCS_PostAnnotations_Call {
+	return &MockVCS_PostAnnotations_Call{Call: _e.mock.On("PostAnnotations", ctx, annotations, failingKeys)}
+}
+
+func (_c *MockVCS_PostAnnotations_Call) Run(run func(ctx context.Context, annotations []comment.Annotation, failingKeys []string)) *MockVCS_PostAnnotations_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 []comment.Annotation
+		if args[1] != nil {
+			arg1 = args[1].([]comment.Annotation)
+		}
+		var arg2 []string
+		if args[2] != nil {
+			arg2 = args[2].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockVCS_PostAnnotations_Call) Return(annotationResult vcs.AnnotationResult, err error) *MockVCS_PostAnnotations_Call {
+	_c.Call.Return(annotationResult, err)
+	return _c
+}
+
+func (_c *MockVCS_PostAnnotations_Call) RunAndReturn(run func(ctx context.Context, annotations []comment.Annotation, failingKeys []string) (vcs.AnnotationResult, error)) *MockVCS_PostAnnotations_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PostComment provides a mock function for the type MockVCS
 func (_mock *MockVCS) PostComment(ctx context.Context, body string, behavior vcs.Behavior) (vcs.PostResult, error) {
 	ret := _mock.Called(ctx, body, behavior)
