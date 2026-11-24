@@ -9,6 +9,7 @@ import (
 
 	"github.com/infracost/ci/v2/internal/api/dashboard"
 	"github.com/infracost/ci/v2/internal/trace"
+	"github.com/infracost/cli/pkg/logging"
 	pkgscanner "github.com/infracost/cli/pkg/scanner"
 	repoconfig "github.com/infracost/config"
 	gorat "github.com/infracost/go-proto/pkg/rat"
@@ -61,6 +62,10 @@ type ParsedRunParameters struct {
 	FinopsPolicies    []*event.FinopsPolicySettings
 	Guardrails        []*event.Guardrail
 	Budgets           []*event.Budget
+
+	// AIEnabled is the enableAiPlugin feature flag: without it, appcode
+	// projects aren't parsed and the ai provider doesn't run.
+	AIEnabled bool
 }
 
 func ParseRunParameters(raw dashboard.RunParameters) (*ParsedRunParameters, error) {
@@ -70,6 +75,7 @@ func ParseRunParameters(raw dashboard.RunParameters) (*ParsedRunParameters, erro
 		CloudEnabled:     raw.CloudEnabled,
 		RepositoryID:     raw.RepositoryID,
 		RepositoryName:   raw.RepositoryName,
+		AIEnabled:        pkgscanner.AIEnabled(raw.FeatureFlags),
 	}
 
 	parsed.UsageDefaults = new(event.UsageDefaults)
@@ -160,6 +166,7 @@ func (config *Config) projectScanOptions(s projectScan) *pkgscanner.ScanProjectO
 		UsageDefaults:             s.runParams.UsageDefaults,
 		RepoUsage:                 s.repoUsage,
 		PreviousResourceAddresses: s.previous,
+		AIEnabled:                 s.runParams.AIEnabled,
 		Plugins:                   &config.Plugins,
 		Logging:                   config.Logging,
 		PrivateSourceAllowlist:    sources,
@@ -242,6 +249,10 @@ func (config *Config) ScanDirectory(ctx context.Context, dir string, accessToken
 				repoUsage:   repoUsage,
 				previous:    previousAddresses[project.Name],
 			}))
+			if errors.Is(err, pkgscanner.ErrProjectSkipped) {
+				logging.Debugf("skipping project %q: AI plugins are off for this org", project.Name)
+				continue
+			}
 			if err != nil {
 				var quotaErr *pkgscanner.RunQuotaExceededError
 				if !errors.As(err, &quotaErr) {

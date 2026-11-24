@@ -4,10 +4,10 @@ go 1.26.10
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/infracost/cli v0.0.14-0.20261110185736-34ae7b58fafd
+	github.com/infracost/cli v0.0.14-0.20261124122517-6771a36b9c34
 	github.com/infracost/config v0.20.0
-	github.com/infracost/go-proto v1.43.0
-	github.com/infracost/proto v1.182.0
+	github.com/infracost/go-proto v1.57.1
+	github.com/infracost/proto v1.184.0
 	github.com/infracost/vcs v0.13.0
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
@@ -49,6 +49,7 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/infracost/analytics-go v0.3.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/liamg/tml v0.7.1 // indirect
