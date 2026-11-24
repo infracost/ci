@@ -26,6 +26,7 @@ type RunParameters struct {
 	FinopsPolicies    []json.RawMessage `json:"finopsPolicies"`
 	Guardrails        []json.RawMessage `json:"guardrails"`
 	Budgets           []json.RawMessage `json:"budgets"`
+	FeatureFlags      json.RawMessage   `json:"featureFlags"`
 }
 
 // RunInput is the input to the addRun mutation.
@@ -335,6 +336,7 @@ func (c *client) RunParameters(ctx context.Context, repoURL, branchName, pullReq
     finopsPolicies
     guardrails
     budgets
+    featureFlags
   }
 }`
 
