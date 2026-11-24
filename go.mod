@@ -7,13 +7,13 @@ require (
 	github.com/infracost/cli v0.0.14-0.20261124122517-6771a36b9c34
 	github.com/infracost/config v0.20.0
 	github.com/infracost/go-proto v1.57.1
-	github.com/infracost/proto v1.184.0
+	github.com/infracost/proto v1.185.0
 	github.com/infracost/vcs v0.13.0
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/stretchr/testify v1.12.1
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/oauth2 v0.38.0
 	google.golang.org/protobuf v1.36.12
 )
 
